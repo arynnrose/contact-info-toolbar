@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6-protected-name-email-city-phone-v338-github-update-prep
+// @version      9.6-protected-name-email-city-phone-v339-team-sync
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @connect      raw.githubusercontent.com
+// @connect      iwznzjgvlthyqsnxrbyo.supabase.co
 // @updateURL    https://raw.githubusercontent.com/arynnrose/contact-info-toolbar/main/Contact_Info_Toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/arynnrose/contact-info-toolbar/main/Contact_Info_Toolbar.user.js
 // @run-at       document-idle
@@ -488,7 +490,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6-protected-name-email-city-phone-v338-github-update-prep";
+    const FRT7_BUILD_ID = "9.6-protected-name-email-city-phone-v339-team-sync";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -15445,6 +15447,175 @@ if (pinBtn) {
     } else {
         init();
     }
+
+
+// ===== v339 TEAM SYNC BRIDGE: isolated from name/city/ZIP/email/phone rules =====
+// All network sync is opt-in. No applicant records or UI preferences are uploaded.
+(function installTeamSync() {
+    const URL = 'https://iwznzjgvlthyqsnxrbyo.supabase.co';
+    const KEY = 'sb_publishable_jD7qGUrlv07T9S4xUEDsrg_i7fMshs3';
+    const ROOT = 'frt7_team_sync_v339_';
+    const CATEGORIES = {
+        rejectedNames: REJECTED_AUTO_NAMES_SINGLE_DB_KEY,
+        learnedCities: LEARNED_CITIES_SINGLE_DB_KEY,
+        usCityDatabaseOverrides: US_CITY_DB_OVERRIDES_KEY,
+        customAreaCodes: CUSTOM_AREA_CODES_KEY,
+        safeFirstNames: SAFE_FIRST_NAMES_KEY,
+        macLastNameCases: FRT7_MAC_LAST_NAME_CASE_KEY
+    };
+    const get = (k, fallback) => GM_getValue(ROOT + k, fallback);
+    const set = (k, value) => GM_setValue(ROOT + k, value);
+    const parse = x => { try { const v = typeof x === 'string' ? JSON.parse(x || '{}') : x; return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (_) { return {}; } };
+    const stable = x => JSON.stringify(x === undefined ? null : x);
+    let busy = false, status = 'Sync OFF (local data only)', panel;
+    function say(message) { status = message; console.info('[Toolbar Team Sync]', message); if (panel) { const el = panel.querySelector('[data-sync-status]'); if (el) el.textContent = message; } }
+    function readLocal() { const result = {}; for (const [cat,key] of Object.entries(CATEGORIES)) result[cat] = parse(GM_getValue(key,'{}')); return result; }
+    function writeLocal(data) {
+        // Preserve existing key formats. Reload the page to refresh the toolbar's in-memory caches.
+        for (const [cat,key] of Object.entries(CATEGORIES)) GM_setValue(key, JSON.stringify(data[cat] || {}));
+    }
+    function request(method, path, body, token, headers = {}) {
+        return new Promise((resolve,reject) => GM_xmlhttpRequest({
+            method, url: URL + path, timeout: 30000,
+            headers: { apikey: KEY, ...(token ? {Authorization:'Bearer '+token} : {}), ...(body ? {'Content-Type':'application/json'} : {}), ...headers },
+            data: body ? JSON.stringify(body) : undefined,
+            onload: r => {
+                let result; try { result = JSON.parse(r.responseText || 'null'); } catch (_) { result = r.responseText; }
+                if (r.status < 200 || r.status >= 300) reject(new Error('HTTP '+r.status+': '+JSON.stringify(result).slice(0,250)));
+                else resolve({data:result, headers:r.responseHeaders||''});
+            },
+            onerror: () => reject(new Error('Network unavailable')), ontimeout: () => reject(new Error('Network timeout'))
+        }));
+    }
+    async function token() {
+        let session = parse(get('session','{}'));
+        if (!session.access_token) throw new Error('Sign in first');
+        if (session.expires_at && Date.now() > (session.expires_at - 90)*1000) {
+            if (!session.refresh_token) throw new Error('Session expired: sign in again');
+            const r = await request('POST','/auth/v1/token?grant_type=refresh_token',{refresh_token:session.refresh_token});
+            session = {...r.data,expires_at:Math.floor(Date.now()/1000)+(r.data.expires_in||3600)};
+            set('session',JSON.stringify(session));
+        }
+        return session.access_token;
+    }
+    async function authorized(t) {
+        const r = await request('GET','/rest/v1/toolbar_members?select=user_id&limit=1',null,t);
+        if (!Array.isArray(r.data) || !r.data.length) throw new Error('This Supabase account is not in toolbar_members');
+    }
+    async function signIn(email,password) {
+        const r = await request('POST','/auth/v1/token?grant_type=password',{email,password});
+        const session = {...r.data,expires_at:Math.floor(Date.now()/1000)+(r.data.expires_in||3600)};
+        await authorized(session.access_token);
+        set('session',JSON.stringify(session)); say('Signed in. Sync remains OFF until enabled.');
+    }
+    async function fetchRemote(t) {
+        const all = new Map();
+        for (let offset=0; offset<100000; offset+=500) {
+            const r = await request('GET','/rest/v1/toolbar_shared_items?select=category,item_key,item_value,deleted,updated_at&order=category.asc,item_key.asc&limit=500&offset='+offset,null,t);
+            const rows = r.data;
+            if (!Array.isArray(rows)) throw new Error('Unexpected database response');
+            for (const row of rows) all.set(row.category+'\u0000'+row.item_key,row);
+            if (rows.length < 500) return all;
+        }
+        throw new Error('Remote row safety limit exceeded');
+    }
+    function flatten(data) {
+        const out = new Map();
+        for (const cat of Object.keys(CATEGORIES)) for (const [k,v] of Object.entries(data[cat]||{})) out.set(cat+'\u0000'+k,{category:cat,item_key:k,item_value:v,deleted:v?.deleted===true});
+        return out;
+    }
+    function unflatten(map) {
+        const out = {}; for (const cat of Object.keys(CATEGORIES)) out[cat] = {};
+        for (const [id,row] of map) if (out[row.category] && !row.__absent) out[row.category][row.item_key] = row.item_value;
+        return out;
+    }
+    async function upload(t,rows) {
+        for (let i=0; i<rows.length; i+=80) {
+            const chunk = rows.slice(i,i+80);
+            await request('POST','/rest/v1/toolbar_shared_items?on_conflict=category,item_key',chunk,t,{'Prefer':'resolution=merge-duplicates,return=minimal'});
+            say('Uploading shared entries '+Math.min(i+80,rows.length)+' / '+rows.length);
+        }
+    }
+    function rowFor(row,uid) { return {category:row.category,item_key:row.item_key,item_value:row.item_value,deleted:!!row.deleted,updated_by:uid}; }
+    function identity() { const s=parse(get('session','{}')); return s.user?.id || ''; }
+    async function seedBackup(file) {
+        if (busy) return;
+        busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            const existing=await fetchRemote(t);
+            if (existing.size) throw new Error('Database already has '+existing.size+' entries. Seed is disabled to avoid overwriting shared changes.');
+            const backup=JSON.parse(await file.text());
+            if (backup.format!=='ContactInfoToolbarBackup'||!backup.data) throw new Error('Not a Contact Info Toolbar backup');
+            const entries=[...flatten(backup.data).values()];
+            if (!entries.length) throw new Error('Backup contains no shared data');
+            if (!confirm('Upload '+entries.length+' learned entries to your PRIVATE Supabase database? This does NOT upload toolbar preferences or applicant records.')) return;
+            await upload(t,entries.map(x=>rowFor(x,identity())));
+            // Do not assume local storage is identical to the selected backup.
+            set('baseline',JSON.stringify({}));
+            say('Seed complete: '+entries.length+' records. Click Sync Now, then Enable Auto Sync.');
+        } catch(e) { say('Seed error: '+e.message); } finally { busy=false; }
+    }
+    async function syncNow() {
+        if (busy) return;
+        busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            const remote=await fetchRemote(t);
+            if (!remote.size) throw new Error('Remote database is empty. Seed your backup first.');
+            const current=flatten(readLocal());
+            const old=parse(get('baseline','{}'));
+            const first=!get('baseline',null);
+            const writes=[];
+            const merged=new Map();
+            // Remote wins for existing keys on FIRST connection; unique local keys are added.
+            // Thereafter, only keys changed locally since the last successful sync are uploaded.
+            for (const [id,row] of remote) merged.set(id,{...row});
+            for (const [id,row] of current) {
+                const before=old[id];
+                const changed=!first && before!==undefined && before!==stable(row);
+                if (!remote.has(id) || changed) {
+                    const uploadRow=rowFor(row,identity()); writes.push(uploadRow); merged.set(id,uploadRow);
+                }
+            }
+            // Explicit local removal since the last sync becomes a remote tombstone.
+            if (!first) for (const id of Object.keys(old)) if (!current.has(id)) {
+                const remoteRow=remote.get(id); if (!remoteRow) continue;
+                const tomb={...remoteRow,deleted:true,item_value:{...(remoteRow.item_value||{}),deleted:true,deletedAt:Date.now()}};
+                writes.push(rowFor(tomb,identity())); merged.set(id,tomb);
+            }
+            if (writes.length) await upload(t,writes);
+            // No writes to local until all remote operations succeed.
+            const result=unflatten(merged);
+            const after=flatten(result);
+            const baseline={}; for (const [id,row] of after) baseline[id]=stable({category:row.category,item_key:row.item_key,item_value:row.item_value,deleted:row.deleted});
+            writeLocal(result);
+            set('baseline',JSON.stringify(baseline));
+            set('last_success',new Date().toISOString());
+            say('Synced '+merged.size+' shared entries ('+writes.length+' uploaded). Reload the page to refresh toolbar caches.');
+        } catch(e) { say('Sync error: '+e.message); } finally { busy=false; }
+    }
+    function openPanel() {
+        if (panel?.isConnected) { panel.remove(); panel=null; return; }
+        panel=document.createElement('div');
+        panel.style.cssText='position:fixed;z-index:2147483647;right:16px;top:90px;width:355px;max-width:95vw;background:#172332;color:white;border:2px solid #6da9e5;border-radius:9px;padding:14px;font:13px Arial;box-shadow:0 4px 20px #0008';
+        panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button data-close style="float:right">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><label><input data-auto type="checkbox"> Enable automatic sync every 2 minutes</label></p><p style="font-size:11px">Start with backup export on every computer. Only upload the first backup to an EMPTY database. Other computers use Sync Now. Changes are stored locally and uploaded at the next sync. Reload after receiving changes.</p>';
+        document.body.appendChild(panel);
+        panel.querySelector('[data-sync-status]').textContent=status;
+        panel.querySelector('[data-auto]').checked=!!get('enabled',false);
+        panel.querySelector('[data-close]').onclick=()=>{panel.remove();panel=null;};
+        panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
+        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set('session','{}');panel.querySelector('[data-auto]').checked=false;say('Signed out; auto sync OFF');};
+        panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
+        panel.querySelector('[data-now]').onclick=syncNow;
+        panel.querySelector('[data-auto]').onchange=e=>{set('enabled',!!e.target.checked);say(e.target.checked?'Auto sync ON — every 2 minutes':'Auto sync OFF');};
+    }
+    GM_registerMenuCommand('Contact Toolbar — Team Sync',openPanel);
+    setInterval(()=>{if(get('enabled',false)&&!busy)syncNow();},120000);
+    console.info('Toolbar v339 team sync available via Tampermonkey menu (OFF by default).');
+})();
+// ===== END TEAM SYNC BRIDGE =====
+
 })();
 
 
