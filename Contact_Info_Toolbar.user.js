@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6-protected-name-email-city-phone-v339-team-sync
+// @version      9.6.367
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -398,9 +398,11 @@ function sanitizeEmail(email) {
     // The old cleanup used a word-boundary after ".com". That fails when the
     // next flattened character is another letter because there is no word
     // boundary between the "m" in ".com" and the "d" in "douglas".
-    const hardTld = clean.match(/\.(?:com|net|org|edu|gov)/i);
+    const atIndex = clean.indexOf("@");
+    const domainPart = atIndex >= 0 ? clean.slice(atIndex + 1) : "";
+    const hardTld = domainPart.match(/\.(?:com|net|org|edu|gov)/i);
     if (hardTld && typeof hardTld.index === "number") {
-        clean = clean.slice(0, hardTld.index + hardTld[0].length);
+        clean = clean.slice(0, atIndex + 1 + hardTld.index + hardTld[0].length);
     }
 
     // Preserve Apple relay handling, then normalize casing.
@@ -490,7 +492,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6-protected-name-email-city-phone-v339-team-sync";
+    const FRT7_BUILD_ID = "9.6.367-update-test";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -1524,7 +1526,7 @@ function isUsableTenDigitPhone(digits) {
         saveRejectedAutoNames();
 
         const verify = parseRejectedNameStoreObject(GM_getValue(REJECTED_AUTO_NAMES_SINGLE_DB_KEY));
-        if (verify[normalized]?.deleted !== true) {
+        if (verify[exactKey]?.deleted !== true) {
             console.error(`Toolbar rejected names: v24 delete verification FAILED for "${displayName}".`);
             return false;
         }
@@ -2871,7 +2873,7 @@ const NAME_SUFFIXES = new Set([
 // a person's name. These are never part of First Name or Last Name.
 const NAME_CREDENTIALS = new Set([
     "CPC", "CPC-A", "CPCA",
-    "MBA", "AAI", "ASCR", "MSA", "LCSW", "SIFI", "PMHNB", "BSN", "MSN", "BCAS", "NRST", "PRC", "EA", "LMSW", "MPA", "MHA", "MPH", "MS", "MA", "BS", "BBA", "BA",
+    "MBA", "AAI", "ASCR", "MSA", "LCSW", "LSW", "SIFI", "PMHNB", "BSN", "MSN", "BCAS", "NRST", "PRC", "EA", "LMSW", "MPA", "MHA", "MPH", "MS", "MA", "BS", "BBA", "BA",
     "PHD", "PHD.", "ED.D", "EDD",
     "MD", "MD.", "DO", "DO.",
     "RN", "RN.", "LPN", "LVN", "NP", "PA", "PA-C",
@@ -4263,6 +4265,11 @@ function cleanExistingNameFields(firstInput, lastInput) {
 }
 
 function fillNameFields(options = {}) {
+    // v356: Diagnostic-only decision trace. No name rules changed.
+    const traceAuto = (stage, detail = "") => {
+        if (options.auto) console.info(`Toolbar AUTO NAME v356: ${stage}${detail ? "; " + detail : ""}`);
+    };
+    traceAuto("ENTER fillNameFields", `requireConfirmation=${Boolean(options.requireConfirmation)}`);
     // v48 HARD REVERT GUARD:
     // Once the user has reverted Name on this applicant, NO Auto Name path may
     // write to First/Last again. Manual clicking of the Name button remains allowed.
@@ -4321,6 +4328,7 @@ function fillNameFields(options = {}) {
     // Always clean the values already present on the page, even when name
     // detection later decides not to replace them.
     const cleanedExisting = cleanExistingNameFields(firstInput, lastInput);
+    traceAuto("CURRENT", `first=${JSON.stringify(firstInput.value)} last=${JSON.stringify(lastInput.value)} cleaned=${Boolean(cleanedExisting)}`);
 
     /*
      * Preserve the existing full contact name when the resume only presents
@@ -4336,6 +4344,7 @@ function fillNameFields(options = {}) {
      * This protection applies to both Auto mode and the manual Name button.
      */
     if (resumeInitialsMatchCurrentFullName(firstInput, lastInput)) {
+        traceAuto("BLOCK", "resume initials match existing full name");
         return cleanedExisting;
     }
 
@@ -4357,6 +4366,7 @@ function fillNameFields(options = {}) {
            hybridExtractName(text))
         : hybridExtractName(text);
 
+    traceAuto("DETECTED", name ? `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)} suffixRepair=${Boolean(name.suffixCurrentFieldRepair)}` : "no candidate");
     if (!name) {
         console.warn("Toolbar: could not infer name.");
         return cleanedExisting;
@@ -4367,6 +4377,7 @@ function fillNameFields(options = {}) {
     // that is already a transactional confirmation. Do not let the broader Auto
     // confirmation heuristic veto this exact repair.
     if (options.requireConfirmation && !name?.suffixCurrentFieldRepair && !isAutoNameConfirmed(name)) {
+        traceAuto("BLOCK", "candidate failed isAutoNameConfirmed");
         return cleanedExisting;
     }
 
@@ -4378,6 +4389,7 @@ function fillNameFields(options = {}) {
         : isRejectedAutoName(name);
 
     if (nameIsRejected) {
+        traceAuto("BLOCK", "detected name is in rejected-name protection");
         console.warn(`Toolbar NAME: skipped previously rejected detected name "${name.first} ${name.last}".`);
         if (options.auto) pendingAutoNameLearning = null;
         return cleanedExisting;
@@ -4399,6 +4411,7 @@ function fillNameFields(options = {}) {
         )
     );
 
+    traceAuto("NORMALIZED CANDIDATE", `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)}`);
     // v89 HARD SUFFIX STOP:
     // A suffix can NEVER be the Last Name by itself. The generic credential
     // stripper preserves a one-token value to avoid deleting legitimate surnames,
@@ -4422,6 +4435,7 @@ function fillNameFields(options = {}) {
     // v55: Never write an explicitly rejected one-word token into Last Name.
     // This is checked AFTER cleanup so punctuation/case cannot bypass the guard.
     if (!name?.suffixBoundaryName && isRejectedLastNameCandidate(name.last)) {
+        traceAuto("BLOCK", `rejected last-name token ${JSON.stringify(name.last)}`);
         console.warn(`Toolbar NAME v55: refused rejected Last Name token "${name.last}".`);
         if (options.auto) pendingAutoNameLearning = null;
         return cleanedExisting;
@@ -4438,6 +4452,7 @@ function fillNameFields(options = {}) {
     const proposedLastIsInitial  = /^[A-Za-z]\.?$/.test(String(name.last || "").trim());
 
     if (proposedFirstIsInitial && proposedLastIsInitial) {
+        traceAuto("BLOCK", "both proposed names are initials");
         console.warn(
             `Toolbar NAME: refused to replace existing name with two initials "${name.first} ${name.last}".`
         );
@@ -4450,6 +4465,7 @@ function fillNameFields(options = {}) {
     // into Donyele E. Preserve the existing complete surname.
     if (/^[A-Za-z]\.?$/.test(String(name.last || "").trim()) &&
         String(lastInput.value || "").trim().replace(/[^A-Za-z]/g, "").length > 1) {
+        traceAuto("BLOCK", "proposed surname is a single initial");
         console.info(`Toolbar NAME v321: refused initial-only replacement surname "${name.last}".`);
         if (options.auto) pendingAutoNameLearning = null;
         return cleanedExisting;
@@ -4568,12 +4584,40 @@ function fillNameFields(options = {}) {
             }
 
             if (splitSurnameConfirmed) {
+                traceAuto("GUARD", "v261 split-surname preservation");
                 console.info(
                     `Toolbar NAME v261: preserved existing Last Name "${existingLastForSplitGuard}" ` +
                     `because the resume header contains it split across whitespace.`
                 );
                 name.last = existingLastForSplitGuard;
             }
+        }
+    }
+
+    // v355: Apply the EXISTING v265 rendered-refinement truncation protection
+    // to the primary Auto Name write path too. v261 only checks txtResumeRaw,
+    // which can contain merely "Life" for iframe-based Word resumes.
+    // This is Auto-only: manual Name retains its existing behavior.
+    if (options.auto) {
+        const existingFirst = String(firstInput.value || "").trim();
+        const existingLast = String(lastInput.value || "").trim();
+        const proposedFirst = String(name.first || "").trim();
+        const proposedLast = String(name.last || "").trim();
+        // v357: The foldTypography helper in scheduleRenderedNameRefinement()
+        // is local to that function and unavailable here. Use a local equivalent.
+        const foldAutoSurname = value => normalizeUnicode(String(value || ""))
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/[’]/g, "'").replace(/[^A-Za-z'\-]+/g, "").toLowerCase();
+        const currentFold = foldAutoSurname(existingLast);
+        const proposedFold = foldAutoSurname(proposedLast);
+        if (foldAutoSurname(existingFirst) === foldAutoSurname(proposedFirst) &&
+            currentFold.length >= 3 && proposedFold.length >= 1 &&
+            proposedFold.length < currentFold.length &&
+            (currentFold.startsWith(proposedFold) || currentFold.endsWith(proposedFold))) {
+            console.info(`Toolbar NAME v355: existing v265 surname truncation protection applied to primary Auto path; preserved "${existingLast}" instead of "${proposedLast}" (raw resume may be empty; iframe name may be split).`);
+            traceAuto("BLOCK", "v355 prefix/suffix truncation protection");
+            pendingAutoNameLearning = null;
+            return cleanedExisting;
         }
     }
 
@@ -4622,6 +4666,7 @@ function fillNameFields(options = {}) {
         }
     }
 
+    traceAuto("ALLOW", `writing first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)}`);
     const originalBeforeAuto = {
         first: String(firstInput.value || "").trim(),
         last: String(lastInput.value || "").trim()
@@ -4645,6 +4690,7 @@ function fillNameFields(options = {}) {
         };
     }
 
+    traceAuto("WRITTEN", `first=${JSON.stringify(firstInput.value)} last=${JSON.stringify(lastInput.value)}`);
     return true;
 }
 
@@ -5290,56 +5336,69 @@ function fillNameFieldsWithLoadRetries() {
         return `${appId}||${rawHead}`;
     }
 
-    // AUTO NAME v178 — ONE SHOT ONLY:
-    // The applicant/page-load scheduler already waits for the configured 500 ms
-    // settle period before runAutoFixOnce() reaches this function. At that point,
-    // click the existing Name button exactly ONCE for this applicant.
-    //
-    // There are deliberately NO Name retries here:
-    // - no delayed second click
-    // - no 400 ms readiness loop
-    // - no iframe-load retry
-    // - no stability/repaint retry
-    //
-    // The manual Name button remains unchanged.
+    // v349: bounded Auto Name verification. All writes still go through the existing
+    // Name button / fillNameFields({auto:true}), preserving BOTH-name protection,
+    // swaps, rejection lists, Revert, and manual-edit locks.
+    const frt7NameReadinessAttempts = new Map();
     function queueDelayedNameButtonClick(reason = "resume load") {
-        if (window.__frt7_auto_name_enabled === false) return;
-        if (window.__frt7_name_reverted === true) return;
-
-        const rawText = String(getResumeText() || "");
-        const nameBtn = document.getElementById("frt7-name-btn");
-        const firstInput =
-            document.querySelector("#txtFirstNameDataEntry") ||
-            document.querySelector("#txtFirstName");
-        const lastInput =
-            document.querySelector("#txtLastNameDataEntry") ||
-            document.querySelector("#txtLastName");
-
-        if (!rawText.trim() || !nameBtn || !firstInput || !lastInput) {
-            console.warn("Toolbar AUTO NAME v178: one-shot skipped because resume/name fields were not ready.");
+        const log = (message, warn = false) => console[warn ? "warn" : "info"](`Toolbar AUTO NAME v349: ${message}`);
+        if (window.__frt7_auto_name_enabled === false) { log("SKIP: Name disabled in Auto settings."); return; }
+        if (window.__frt7_name_reverted === true) { log("SKIP: Name was reverted for this applicant."); return; }
+        const signature = getCurrentApplicantSignature();
+        if (signature && delayedNameClickSignature === signature) { log("SKIP: already attempted for this applicant."); return; }
+        const inputs = () => ({
+            first: document.querySelector("#txtFirstNameDataEntry") || document.querySelector("#txtFirstName"),
+            last: document.querySelector("#txtLastNameDataEntry") || document.querySelector("#txtLastName"),
+            button: document.getElementById("frt7-name-btn")
+        });
+        const snapshot = () => {
+            const {first,last} = inputs();
+            return `${String(first?.value || "").trim()} / ${String(last?.value || "").trim()}`;
+        };
+        const start = inputs();
+        if (!String(getResumeText() || "").trim() || !start.first || !start.last || !start.button) {
+            log("WAIT: resume, Name button, or name inputs not ready; retrying shortly.", true);
+            const tries = (frt7NameReadinessAttempts.get(signature) || 0) + 1;
+            frt7NameReadinessAttempts.set(signature, tries);
+            if (tries <= 6) setTimeout(() => {
+                if (getCurrentApplicantSignature() === signature) queueDelayedNameButtonClick("late iframe/name readiness");
+            }, 350);
+            else log("STOP: Name/iframe remained unavailable after six readiness checks.", true);
             return;
         }
-
-        if (isNameManuallyLocked(firstInput, lastInput)) {
-            console.info("Toolbar AUTO NAME v178: one-shot skipped because user edited the name.");
-            return;
-        }
-
-        const currentSignature = getCurrentApplicantSignature();
-        if (currentSignature && delayedNameClickSignature === currentSignature) return;
-
-        console.info(`Toolbar AUTO NAME v178: ONE literal Name-button click (${reason}).`);
-        window.__frt7_auto_name_click_in_progress = true;
-        try {
-            nameBtn.click();
-            delayedNameClickSignature = currentSignature;
-        } finally {
-            window.__frt7_auto_name_click_in_progress = false;
-        }
+        if (isNameManuallyLocked(start.first, start.last)) { log("SKIP: manual First/Last edit lock."); return; }
+        delayedNameClickSignature = signature;
+        const initial = snapshot();
+        const click = (attempt) => {
+            if (getCurrentApplicantSignature() !== signature) { log("STOP: applicant changed."); return false; }
+            if (window.__frt7_auto_name_enabled === false || window.__frt7_name_reverted === true) { log("STOP: Auto Name disabled or reverted."); return false; }
+            const {first,last,button} = inputs();
+            if (!first || !last || !button || isNameManuallyLocked(first,last)) { log("STOP: inputs unavailable or manually edited."); return false; }
+            log(`attempt ${attempt}: invoking existing protected Name button; before=${snapshot()}; reason=${reason}.`);
+            window.__frt7_auto_name_click_in_progress = true;
+            try { button.click(); } finally { window.__frt7_auto_name_click_in_progress = false; }
+            return true;
+        };
+        if (!click(1)) return;
+        // The button handler awaits rejectedAutoNamesReady, so verify after its
+        // asynchronous continuation. Do not repeatedly click after a successful change.
+        setTimeout(() => {
+            if (getCurrentApplicantSignature() !== signature) return;
+            const now = snapshot();
+            if (now !== initial) { log(`SUCCESS: ${initial} -> ${now}.`); return; }
+            log(`VERIFY: no name change after first attempt (${now}); one guarded retry.`);
+            if (!click(2)) return;
+            setTimeout(() => {
+                if (getCurrentApplicantSignature() !== signature) return;
+                const finalName = snapshot();
+                if (finalName !== initial) log(`SUCCESS after retry: ${initial} -> ${finalName}.`);
+                else log(`UNCHANGED after two protected attempts: ${finalName}. Possible name protection/rejection, or no valid candidate; no further retries.`, true);
+            }, 450);
+        }, 650);
     }
 
     function clickNameButtonOnceWhenResumeLoads() {
-        queueDelayedNameButtonClick("500ms settled resume load");
+        queueDelayedNameButtonClick("settled resume load");
     }
 
     function getCurrentApplicantId() {
@@ -6480,10 +6539,77 @@ function fillNameFieldsWithLoadRetries() {
         return getApplicantLifecycleKey() || "";
     }
 
+    // v347: A trusted location must contain an actual city name, not punctuation.
+    function frt7ValidHeaderCity(loc) {
+        const city = String(loc?.city || "").trim();
+        const state = String(loc?.state || "").trim().toUpperCase();
+        return /[A-Za-zÀ-ÖØ-öø-ÿ]/.test(city) &&
+            !/^[^A-Za-zÀ-ÖØ-öø-ÿ]+$/.test(city) &&
+            /^[A-Z]{2}$/.test(state);
+    }
+
+    // v359: A complete existing address explicitly printed beside the applicant's
+    // own phone/email in the resume is stronger than employer/education cities.
+    // Scan the full flattened resume because Word sidebars may appear after Skills.
+    // Require exact City + State + ZIP, and a nearby matching contact identifier.
+    // v360: Cover-letter recipient locations are not applicant addresses.
+    // Preserve an existing complete location when the applicant identifies their
+    // state at the top, and a later Hiring Manager / Dear... recipient block
+    // contains a different city/state. Never affects the manual Area button.
+    function frt7ProtectCoverLetterApplicantLocation() {
+        const raw = String(document.getElementById("txtResumeRaw")?.value || getResumeText() || "");
+        const city = String(document.getElementById("txtCityDataEntry")?.value || "").trim();
+        const state = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+        const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim();
+        if (!city || !/^[A-Z]{2}$/.test(state) || !/^\d{5}(?:-\d{4})?$/.test(zip)) return false;
+        const start = raw.slice(0, 300);
+        const status = start.match(/\b(?:remote|hybrid)\s*[-–—:,/]\s*([A-Z]{2})\b/i);
+        if (!status || status[1].toUpperCase() !== state) return false;
+        const recipient = raw.search(/\b(?:Hiring Manager|Dear Hiring Manager|To Whom It May Concern)\b/i);
+        if (recipient < 0 || recipient > 600) return false;
+        // A named recipient block and greeting confirm this is a cover letter.
+        if (!/\bDear\s+(?:Hiring Manager|[A-Z][a-z]+)\b/i.test(raw.slice(recipient, recipient + 500))) return false;
+        console.info(`Toolbar CITY v360: cover-letter recipient address excluded; kept existing applicant ${city}, ${state} ${zip} (header says ${status[0]}).`);
+        return true;
+    }
+
+    // v361: Resolve cover-letter applicant location BEFORE any learned city matcher.
+    // The v360 boolean check alone was too late for the early trusted-header path.
+    function frt7CoverLetterExistingLocationCandidate() {
+        if (!frt7ProtectCoverLetterApplicantLocation()) return null;
+        const city = String(document.getElementById("txtCityDataEntry")?.value || "").trim();
+        const state = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+        const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim();
+        return { city, state, zip, trusted:true, withState:true,
+            explicitHeaderPair:true, coverLetterApplicantGuard:true, index:0 };
+    }
+
+    function frt7VerifiedExistingContactLocation() {
+        const city = normalizeContactDisplayCase(document.getElementById("txtCityDataEntry")?.value || "");
+        const state = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+        const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim();
+        if (!city || !/^[A-Z]{2}$/.test(state) || !/^\d{5}(?:-\d{4})?$/.test(zip)) return null;
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "");
+        if (!raw) return null;
+        const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[’']/g, "['’]").replace(/\s+/g, "\\s+");
+        const re = new RegExp("(^|[^A-Za-z])(" + escaped + ")\\s*,?\\s*" + state + "\\s*[-, ]\\s*" + zip.slice(0,5) + "(?!\\d)", "ig");
+        const phone = String(document.getElementById("txtPhoneDataEntry")?.value || document.getElementById("txtPhone")?.value || "").replace(/\D/g, "").slice(-10);
+        const email = String(document.getElementById("txtEmail")?.value || "").trim().toLowerCase();
+        let match;
+        while ((match = re.exec(raw))) {
+            const near = raw.slice(Math.max(0, match.index - 160), match.index + match[0].length + 260);
+            const digits = near.replace(/\D/g, "");
+            if ((phone.length === 10 && digits.includes(phone)) || (email.includes("@") && near.toLowerCase().includes(email))) {
+                return {city, state, zip, trusted:true, withState:true, explicitHeaderPair:true, verifiedContact:true};
+            }
+        }
+        return null;
+    }
+
     function frt7SetAuthoritativeHeaderLocation(loc, reason = "header") {
         const state = String(loc?.state || "").trim().toUpperCase();
         const city = normalizeContactDisplayCase(String(loc?.city || "").trim());
-        if (!city || !/^[A-Z]{2}$/.test(state)) return false;
+        if (!frt7ValidHeaderCity({city, state})) return false;
 
         frt7AuthoritativeHeaderLocation = {
             key: frt7AuthoritativeLocationKey(),
@@ -6501,6 +6627,7 @@ function fillNameFieldsWithLoadRetries() {
             frt7AuthoritativeHeaderLocation = null;
             return null;
         }
+        if (!frt7ValidHeaderCity(lock)) { frt7AuthoritativeHeaderLocation = null; return null; }
         return lock;
     }
 
@@ -7560,6 +7687,14 @@ function frt7OcrNorthBrunswickHeader(text) {
 }
 
 function findTrustedLearnedCityInHeader(text) {
+    const coverLetterApplicant = frt7CoverLetterExistingLocationCandidate();
+    if (coverLetterApplicant) {
+        frt7SetAuthoritativeHeaderLocation(coverLetterApplicant, "v361 cover-letter applicant location");
+        return coverLetterApplicant;
+    }
+    const verifiedContact = frt7VerifiedExistingContactLocation();
+    if (verifiedContact) return verifiedContact;
+
     const ocrAddress = frt7OcrNorthBrunswickHeader(text);
     if (ocrAddress) return ocrAddress;
     if (!learnedCitiesLoaded || !text) return null;
@@ -7877,14 +8012,10 @@ function findTrustedLearnedCityInHeader(text) {
                     continue;
                 }
 
-                candidates.push({
-                    city,
-                    state: String(entry.state || "").trim().toUpperCase(),
-                    learned: true,
-                    trusted: true,
-                    withState: false,
-                    index: solo.index
-                });
+                // v348: A standalone learned city is NOT evidence of a location.
+                // Do not attach the stored state to a bare word (e.g. "social media"
+                // must never become Media, PA). Only an explicit matching city+state
+                // occurrence may enter the trusted-header candidate pool.
                 break;
             }
         } else if (!collidesWithApplicantName && !standaloneIsUnambiguous) {
@@ -8042,8 +8173,20 @@ function findTrustedLearnedCityInHeader(text) {
             console.info(`Toolbar CITY v337: kept existing complete city "${existingHeaderCity}, ${existingHeaderState}" and ZIP ${existingZipForSuffixGuard}; rejected learned shorter suffix.`);
         }
     }
-    const explicitPairCandidates = candidates.filter(candidate => candidate.withState);
-    const winnerPool = explicitPairCandidates.length ? explicitPairCandidates : candidates;
+    // v347: Purge malformed learned/header candidates before they can win,
+    // erase a good ZIP, or suppress the Area fallback.
+    for (let i = candidates.length - 1; i >= 0; i--) {
+        if (!frt7ValidHeaderCity(candidates[i])) {
+            console.info(`Toolbar CITY v347: rejected invalid header candidate "${candidates[i].city}, ${candidates[i].state}".`);
+            candidates.splice(i, 1);
+        }
+    }
+    if (!candidates.length) return null;
+
+    // v348: Final fail-closed guard for every candidate source. Never promote a
+    // standalone learned word to a trusted location, even if another path adds it.
+    const winnerPool = candidates.filter(candidate => candidate.withState === true);
+    if (!winnerPool.length) return null;
     winnerPool.sort((a, b) =>
         a.index - b.index ||
         b.city.length - a.city.length
@@ -8727,6 +8870,22 @@ function frt7FormattedIframeContactCityV312() {
 }
 
 function fillCityOnlyFromResume(options = {}) {
+    if (options?.trustedOnly && !options?.manualButton) {
+        const coverLetterApplicant = frt7CoverLetterExistingLocationCandidate();
+        if (coverLetterApplicant) {
+            frt7SetAuthoritativeHeaderLocation(coverLetterApplicant, "v361 early cover-letter guard");
+            return true;
+        }
+    }
+    if (options?.trustedOnly && !options?.manualButton) {
+        const verified = frt7VerifiedExistingContactLocation();
+        if (verified) {
+            frt7SetAuthoritativeHeaderLocation(verified, "verified resume contact address v359");
+            console.info(`Toolbar CITY v359: protected verified applicant contact ${verified.city}, ${verified.state} ${verified.zip}; ignored employment cities.`);
+            return true;
+        }
+    }
+
     // v297 PRE-CITY HARD SOURCE LOCK:
     // This function is an EARLIER Auto City path than fillAutoCityStateFromResume().
     // v295 protected the later path, but this earlier call could already replace the
@@ -10746,6 +10905,11 @@ function queueAreaRecoveryAfterZipFailure(reason = "ZIP lookup returned no ZIP")
 }
 
 function fillAutoCityStateFromResume(fields = {}) {
+    const coverLetterApplicant = frt7CoverLetterExistingLocationCandidate();
+    if (coverLetterApplicant) {
+        frt7SetAuthoritativeHeaderLocation(coverLetterApplicant, "v361 auto cover-letter guard");
+        return false;
+    }
     const wantsCity = Boolean(fields.city);
     const wantsState = Boolean(fields.state);
     const wantsZipLookup = Boolean(fields.zipLookup);
@@ -11140,6 +11304,10 @@ async function revertOriginalValues(forcedFields = null) {
         console.info("Toolbar CITY/ST v198: no trusted/saved header location; using Area fallback.");
         return fillLocationFromPhone();
     }
+
+// v353: Bridge from applicant lifecycle (outer scope) into the toolbar's
+// private Auto runner (createToolbar scope). No Name button logic is changed.
+let frt7RunScopedAuto = null;
 
 function createToolbar() {
         const existingToolbar = document.getElementById("floating-resume-toolbar-v7");
@@ -12012,7 +12180,7 @@ function renderLearnedCitiesSettings() {
                     const verify = parseLearnedCitiesStore(
                         GM_getValue(LEARNED_CITIES_SINGLE_DB_KEY)
                     );
-                    if (verify[normalized]?.deleted !== true) {
+                    if (verify[exactKey]?.deleted !== true) {
                         removalHandled = false;
                         throw new Error(`Direct X write verification failed for ${label.textContent}.`);
                     }
@@ -12301,7 +12469,7 @@ function renderRejectedAutoNamesSettings() {
                 const verify = parseRejectedNameStoreObject(
                     GM_getValue(REJECTED_AUTO_NAMES_SINGLE_DB_KEY)
                 );
-                if (verify[normalized]?.deleted !== true) {
+                if (verify[exactKey]?.deleted !== true) {
                     removalHandled = false;
                     updateRejectedNameDiagnostic(`${entry.name} DELETE FAILED - DB still active`);
                     throw new Error(`Direct X write verification failed for ${entry.name}.`);
@@ -13362,30 +13530,25 @@ document.getElementById("frt7-reset-bg")
         // then safe learned standalone city, then military fallback. Every underlying
         // matcher is true-header-scoped.
         function getAuthoritativeHeaderLocationForAuto(resumeText = getResumeText()) {
-            const ocrAddress = frt7OcrNorthBrunswickHeader(resumeText);
-            if (ocrAddress) return ocrAddress;
-            const locked = frt7GetAuthoritativeHeaderLocation();
-            if (locked?.city && /^[A-Z]{2}$/.test(String(locked.state || "").trim().toUpperCase())) {
-                return locked;
-            }
+            const coverLetterApplicant = frt7CoverLetterExistingLocationCandidate();
+            if (coverLetterApplicant) return coverLetterApplicant;
+            const verifiedContact = frt7VerifiedExistingContactLocation();
+            if (verifiedContact) return verifiedContact;
 
-            // v215 SAVED HEADER CITY PRIORITY:
-            // A manually saved/trusted City+State that is explicitly present in the TRUE
-            // resume header must beat WallStJobs/literal-header false positives. Example:
-            // "VICTOR ILOG BS, MS 13433 Cypress Point Horizon City TX 79928" must use
-            // saved "Horizon City, TX", not the bogus early "Bs, MS" parse.
-            // Remote/Hybrid explicit locations remain first because they are already a
-            // narrowly proven contact-location form.
-            const savedHeaderCity = findTrustedLearnedCityInHeader(resumeText);
-            return (
-                findExplicitRemoteHybridHeaderCity(resumeText) ||
-                savedHeaderCity ||
-                findExplicitLocationInLiteralRawContact() ||
-                findUsCityDatabaseInHeader(resumeText) ||
-                findUsCityZipInHeaderV171(resumeText) ||
-                findRegionalAliasInHeader(resumeText) ||
-                findMilitaryInstallationInHeader(resumeText)
-            );
+            const valid = loc => frt7ValidHeaderCity(loc) ? loc : null;
+            const ocrAddress = valid(frt7OcrNorthBrunswickHeader(resumeText));
+            if (ocrAddress) return ocrAddress;
+            const locked = valid(frt7GetAuthoritativeHeaderLocation());
+            if (locked) return locked;
+            // Skip invalid candidates and continue to the next source; do not
+            // let a punctuation-only learned city block the Area fallback.
+            return valid(findExplicitRemoteHybridHeaderCity(resumeText)) ||
+                valid(findTrustedLearnedCityInHeader(resumeText)) ||
+                valid(findExplicitLocationInLiteralRawContact()) ||
+                valid(findUsCityDatabaseInHeader(resumeText)) ||
+                valid(findUsCityZipInHeaderV171(resumeText)) ||
+                valid(findRegionalAliasInHeader(resumeText)) ||
+                valid(findMilitaryInstallationInHeader(resumeText));
         }
 
         // v182 CURRENT-EXPERIENCE CORROBORATION:
@@ -14052,8 +14215,21 @@ document.getElementById("frt7-reset-bg")
         }
 
         async function runAutoFixOnce() {
-            if (autoRunCompleted) return;
+            // v351: expose silent early returns, including repeated watchdog runs.
+            console.info(`Toolbar AUTO v351: entered unified pass; completed=${autoRunCompleted}; applicant=${getCurrentApplicantId()}.`);
+            if (autoRunCompleted) {
+                console.info("Toolbar AUTO v351: SKIP unified pass: already running/completed for this lifecycle.");
+                return;
+            }
             autoRunCompleted = true;
+            console.info("Toolbar AUTO v351: starting independent Name readiness/settings check.");
+            // Start Name before any unrelated progress/location initialization.
+            // Still use the protected Name button, never a direct name-field write.
+            void getAutoFields().then(fields => {
+                window.__frt7_auto_name_enabled = Boolean(fields.name);
+                console.info(`Toolbar AUTO NAME v351: setting=${fields.name ? "ON" : "OFF"}; iframeTextLength=${String(getResumeText() || "").length}; button=${Boolean(document.getElementById("frt7-name-btn"))}.`);
+                if (fields.name) queueDelayedNameButtonClick("early independent pass");
+            }).catch(err => console.warn("Toolbar AUTO NAME v351: failed to read settings:", err));
             const progressRun = frt7BeginProgress("Working… preparing contact fields");
 
             // v197: Freeze WallStJobs' fully painted location before ANY automatic
@@ -14061,7 +14237,9 @@ document.getElementById("frt7-reset-bg")
             // because every unified Auto pass gets a fresh lifecycle-keyed snapshot.
             frt7CapturePreAutoLocationSnapshot("runAutoFixOnce start");
 
+            console.info("Toolbar AUTO v350: waiting for city and rejected-name databases before remaining fields.");
             await Promise.all([learnedCitiesReady, rejectedAutoNamesReady]);
+            console.info("Toolbar AUTO v350: databases ready; continuing remaining fields.");
 
             // v37: Do NOT learn cities merely because they were already on the page.
             // Only genuine human City edits create trusted city entries.
@@ -14090,7 +14268,8 @@ document.getElementById("frt7-reset-bg")
             if (fields.city) setTimeout(() => frt7QueueCityOnlyCanonicalizerV189("post-fast-pass"), 250);
 
             frt7Progress("Working… Name", progressRun);
-            if (fields.name && !isNameManuallyLocked(firstInput, lastInput)) clickNameButtonOnceWhenResumeLoads();
+            if (fields.name) clickNameButtonOnceWhenResumeLoads();
+            else console.info("Toolbar AUTO NAME v349: SKIP: Name checkbox disabled.");
             frt7Progress("Working… Email", progressRun);
             if (fields.email) clickEmailButtonOnceWhenResumeLoads();
             if (fields.email) {
@@ -14462,6 +14641,16 @@ if (revertEmailBtn) revertEmailBtn.addEventListener("click", () =>
 );
 
 
+// v353: Expose a closure-safe dispatch to the outer applicant-change handler.
+// Reuse the existing Auto settings, name protections, and full unified runner.
+frt7RunScopedAuto = async (reason = "applicant changed") => {
+    console.info(`Toolbar AUTO v353: scoped dispatch entered (${reason}).`);
+    const fields = await getAutoFields();
+    console.info(`Toolbar AUTO NAME v353: enabled=${Boolean(fields.name)}; iframeLength=${String(getResumeText() || "").length}; nameButton=${Boolean(document.getElementById("frt7-name-btn"))}.`);
+    await runAutoFixOnce();
+    console.info("Toolbar AUTO v353: scoped runner returned.");
+};
+
 // 📍 Pin toggle
 if (pinBtn) {
     pinBtn.addEventListener("click", () => {
@@ -14751,7 +14940,18 @@ if (pinBtn) {
             frt7DiagRecordForCurrent(true);
             frt7DiagAdd(`NEW APPLICANT: ${reason}. Starting unified Auto pass.`);
             console.info(`Toolbar AUTO v181: detected new applicant (${reason}); running unified Auto pass.`);
-            await runAutoFixOnce();
+            // v353: Call the bridge installed by createToolbar, not private
+            // functions that are out of scope in this lifecycle callback.
+            try {
+                if (typeof frt7RunScopedAuto !== "function") {
+                    console.warn("Toolbar AUTO v353: scoped runner not ready; retrying after toolbar initialization.");
+                    setTimeout(() => {
+                        if (typeof frt7RunScopedAuto === "function") {
+                            frt7RunScopedAuto("late toolbar initialization").catch(err => console.error("Toolbar AUTO v353: late dispatch failed", err));
+                        } else console.error("Toolbar AUTO v353: scoped runner still unavailable.");
+                    }, 300);
+                } else await frt7RunScopedAuto(reason);
+            } catch (err) { console.error("Toolbar AUTO v353: scoped dispatch failed", err); }
         }, reason);
     }
 
@@ -15447,9 +15647,7 @@ if (pinBtn) {
     } else {
         init();
     }
-
-
-// ===== v339 TEAM SYNC BRIDGE: isolated from name/city/ZIP/email/phone rules =====
+// ===== v359 TEAM SYNC BRIDGE: isolated from name/city/ZIP/email/phone rules =====
 // All network sync is opt-in. No applicant records or UI preferences are uploaded.
 (function installTeamSync() {
     const URL = 'https://iwznzjgvlthyqsnxrbyo.supabase.co';
@@ -15481,8 +15679,19 @@ if (pinBtn) {
             data: body ? JSON.stringify(body) : undefined,
             onload: r => {
                 let result; try { result = JSON.parse(r.responseText || 'null'); } catch (_) { result = r.responseText; }
-                if (r.status < 200 || r.status >= 300) reject(new Error('HTTP '+r.status+': '+JSON.stringify(result).slice(0,250)));
-                else resolve({data:result, headers:r.responseHeaders||''});
+                // Report safe HTTP diagnostics in the Team Sync status itself.
+                // Never display authorization headers, passwords, access tokens, or uploaded values.
+                const isSharedItems = path.includes('/rest/v1/toolbar_shared_items');
+                const responseText = String(r.responseText || '');
+                const safeResponse = isSharedItems
+                    ? (Array.isArray(result) ? 'JSON array ('+result.length+' rows)'
+                       : (result && typeof result === 'object'
+                          ? JSON.stringify({code:result.code,message:result.message,details:result.details,hint:result.hint}).slice(0,500)
+                          : responseText.slice(0,300)))
+                    : '';
+                if (r.status < 200 || r.status >= 300) {
+                    reject(new Error('HTTP '+r.status+(isSharedItems ? ' from Supabase: '+safeResponse : ': '+JSON.stringify(result).slice(0,250))));
+                } else resolve({data:result, headers:r.responseHeaders||'', httpStatus:r.status, responseBytes:responseText.length, safeResponse});
             },
             onerror: () => reject(new Error('Network unavailable')), ontimeout: () => reject(new Error('Network timeout'))
         }));
@@ -15529,12 +15738,87 @@ if (pinBtn) {
         for (const [id,row] of map) if (out[row.category] && !row.__absent) out[row.category][row.item_key] = row.item_value;
         return out;
     }
-    async function upload(t,rows) {
-        for (let i=0; i<rows.length; i+=80) {
-            const chunk = rows.slice(i,i+80);
-            await request('POST','/rest/v1/toolbar_shared_items?on_conflict=category,item_key',chunk,t,{'Prefer':'resolution=merge-duplicates,return=minimal'});
-            say('Uploading shared entries '+Math.min(i+80,rows.length)+' / '+rows.length);
+    async function upload(t,rows,seedOnly=false) {
+        // v343: Probe ONE record first. Never send an entire backup until we
+        // independently confirm that the first row exists in the database.
+        // Supabase/PostgREST can return HTTP 201 with [] even when the client
+        // requested a representation; response length alone is not proof.
+        const batches = [];
+        if (seedOnly && rows.length) {
+            batches.push(rows.slice(0,1));
+            for (let i=1; i<rows.length; i+=80) batches.push(rows.slice(i,i+80));
+        } else {
+            for (let i=0; i<rows.length; i+=80) batches.push(rows.slice(i,i+80));
         }
+        let completed=0;
+        for (let batch=0; batch<batches.length; batch++) {
+            const chunk=batches[batch];
+            const uploadPath=seedOnly
+                ? '/rest/v1/toolbar_shared_items?select=category,item_key'
+                : '/rest/v1/toolbar_shared_items?on_conflict=category,item_key&select=category,item_key';
+            const prefer=seedOnly ? 'return=representation' : 'resolution=merge-duplicates,return=representation';
+            const payload = seedOnly && batch===0 ? chunk[0] : chunk;
+            const response=await request('POST',uploadPath,payload,t,{'Prefer':prefer});
+            // Independently read the database. This distinguishes a harmless
+            // empty representation from a request that stored nothing.
+            const remote=await fetchRemote(t);
+            let missing=chunk.filter(row=>!remote.has(row.category+'\u0000'+row.item_key));
+            if (missing.length && chunk.length > 1) {
+                // v345: This project's PostgREST endpoint responds HTTP 201 [] to
+                // array inserts without persisting rows. A single JSON object was
+                // independently verified. Fall back ONLY for missing entries.
+                say('Batch '+(batch+1)+' did not persist '+missing.length+' entries; retrying individually (verified method). '+completed+' / '+rows.length+' confirmed.');
+                const toRetry=missing;
+                // Keep concurrency low to avoid overloading Supabase. Each request
+                // is a separate object; never treat HTTP 201 alone as success.
+                for (let i=0; i<toRetry.length; i+=4) {
+                    const group=toRetry.slice(i,i+4);
+                    await Promise.all(group.map(async row => {
+                        const singlePath=seedOnly
+                            ? '/rest/v1/toolbar_shared_items?select=category,item_key'
+                            : '/rest/v1/toolbar_shared_items?on_conflict=category,item_key&select=category,item_key';
+                        await request('POST',singlePath,row,t,{'Prefer':prefer});
+                    }));
+                }
+                const after=await fetchRemote(t);
+                missing=chunk.filter(row=>!after.has(row.category+'\u0000'+row.item_key));
+            }
+            if (missing.length) {
+                const prefix=seedOnly && batch===0 ? 'Single-record probe failed' : 'Upload readback failed at batch '+(batch+1);
+                throw new Error(prefix+': HTTP '+response.httpStatus+', sent '+chunk.length+
+                    ', response '+response.safeResponse+', database missing '+missing.length+
+                    ' of '+chunk.length+' entries after individual retry. Stopped safely; automatic sync remains OFF.');
+            }
+            completed+=chunk.length;
+            say((seedOnly && batch===0 ? 'Single-record probe verified. ' : '')+
+                'Database confirmed '+completed+' / '+rows.length+' uploaded entries.');
+        }
+    }
+    // v359: Compare meaningful record content, not bookkeeping timestamps.
+    // Keep the existing full baseline format for backward compatibility.
+    const SYNC_METADATA_KEYS = new Set(['learnedAt','updatedAt','createdAt','deletedAt','lastSeen','lastSeenAt','lastUpdated','timestamp','syncedAt','sourceUpdatedAt']);
+    function meaningful(value) {
+        if (Array.isArray(value)) return value.map(meaningful);
+        if (value && typeof value === 'object') {
+            const out = {};
+            for (const key of Object.keys(value).sort()) {
+                if (!SYNC_METADATA_KEYS.has(key)) out[key] = meaningful(value[key]);
+            }
+            return out;
+        }
+        return value;
+    }
+    function sameMeaning(a,b) { return stable(meaningful(a)) === stable(meaningful(b)); }
+    function baselineRow(value) { try { return JSON.parse(value); } catch (_) { return null; } }
+    function diffReport(rows, metadataOnly, remote) {
+        const counts = {};
+        for (const row of rows) {
+            const cat=row.category;
+            if (!counts[cat]) counts[cat]={new:0,edited:0,removed:0};
+            counts[cat][row._reason||'edited']++;
+        }
+        const details = Object.entries(counts).map(([cat,c])=>cat+': '+c.new+' new, '+c.edited+' edited, '+c.removed+' removed').join('; ');
+        return 'Changes by category: '+(details||'none')+'. Metadata-only differences ignored: '+metadataOnly+'. Remote entries read: '+remote.size+'.';
     }
     function rowFor(row,uid) { return {category:row.category,item_key:row.item_key,item_value:row.item_value,deleted:!!row.deleted,updated_by:uid}; }
     function identity() { const s=parse(get('session','{}')); return s.user?.id || ''; }
@@ -15544,16 +15828,29 @@ if (pinBtn) {
         try {
             const t=await token(); await authorized(t);
             const existing=await fetchRemote(t);
-            if (existing.size) throw new Error('Database already has '+existing.size+' entries. Seed is disabled to avoid overwriting shared changes.');
             const backup=JSON.parse(await file.text());
             if (backup.format!=='ContactInfoToolbarBackup'||!backup.data) throw new Error('Not a Contact Info Toolbar backup');
             const entries=[...flatten(backup.data).values()];
             if (!entries.length) throw new Error('Backup contains no shared data');
-            if (!confirm('Upload '+entries.length+' learned entries to your PRIVATE Supabase database? This does NOT upload toolbar preferences or applicant records.')) return;
-            await upload(t,entries.map(x=>rowFor(x,identity())));
+            // Resume only if existing records are a subset of the selected backup.
+            // Never overwrite a remote row from a prior successful upload.
+            const desired=flatten(backup.data);
+            for (const [id,remoteRow] of existing) {
+                if (!desired.has(id)) throw new Error('Database has a shared entry not in this backup. Seed resume stopped to protect data.');
+                const localRow=desired.get(id);
+                if (stable(remoteRow.item_value)!==stable(localRow.item_value) || !!remoteRow.deleted!==!!localRow.deleted)
+                    throw new Error('A remote shared entry differs from this backup. Seed resume stopped to protect data.');
+            }
+            const remaining=entries.filter(x=>!existing.has(x.category+'\u0000'+x.item_key));
+            if (!confirm('Initialize shared data: '+existing.size+' records already verified; upload '+remaining.length+' remaining of '+entries.length+' from your PRIVATE backup?')) return;
+            if (remaining.length) await upload(t,remaining.map(x=>rowFor(x,identity())),true);
+            const verified=await fetchRemote(t);
+            if (verified.size !== entries.length) {
+                throw new Error('Final verification failed: expected '+entries.length+' records but Supabase returned '+verified.size+'. Do NOT seed again until this is investigated.');
+            }
             // Do not assume local storage is identical to the selected backup.
             set('baseline',JSON.stringify({}));
-            say('Seed complete: '+entries.length+' records. Click Sync Now, then Enable Auto Sync.');
+            say('Seed verified: '+verified.size+' records confirmed in Supabase. Click Sync Now; leave Auto Sync OFF until checked.');
         } catch(e) { say('Seed error: '+e.message); } finally { busy=false; }
     }
     async function syncNow() {
@@ -15567,15 +15864,21 @@ if (pinBtn) {
             const old=parse(get('baseline','{}'));
             const first=!get('baseline',null);
             const writes=[];
+            const diagnosticRows=[];
+            let metadataOnly=0;
             const merged=new Map();
             // Remote wins for existing keys on FIRST connection; unique local keys are added.
             // Thereafter, only keys changed locally since the last successful sync are uploaded.
             for (const [id,row] of remote) merged.set(id,{...row});
             for (const [id,row] of current) {
                 const before=old[id];
-                const changed=!first && before!==undefined && before!==stable(row);
+                const beforeRow=before===undefined ? null : baselineRow(before);
+                const rawChanged=!first && before!==undefined && before!==stable(row);
+                const changed=rawChanged && (!beforeRow || !sameMeaning(beforeRow.item_value,row.item_value) || !!beforeRow.deleted!==!!row.deleted);
+                if (rawChanged && !changed) metadataOnly++;
                 if (!remote.has(id) || changed) {
                     const uploadRow=rowFor(row,identity()); writes.push(uploadRow); merged.set(id,uploadRow);
+                    diagnosticRows.push({...uploadRow,_reason:remote.has(id)?'edited':'new'});
                 }
             }
             // Explicit local removal since the last sync becomes a remote tombstone.
@@ -15583,6 +15886,19 @@ if (pinBtn) {
                 const remoteRow=remote.get(id); if (!remoteRow) continue;
                 const tomb={...remoteRow,deleted:true,item_value:{...(remoteRow.item_value||{}),deleted:true,deletedAt:Date.now()}};
                 writes.push(rowFor(tomb,identity())); merged.set(id,tomb);
+                diagnosticRows.push({...tomb,_reason:'removed'});
+            }
+            // v347 SAFETY GUARD: local cache rewrites/migrations can look like thousands
+            // of edits. Never send a bulk change during routine synchronization.
+            // Preserve all local data and the previous baseline on this path.
+            const MAX_ROUTINE_WRITES = 25;
+            if (writes.length > MAX_ROUTINE_WRITES) {
+                set('enabled',false);
+                if (panel?.isConnected) {
+                    const autoBox=panel.querySelector('[data-auto]');
+                    if (autoBox) autoBox.checked=false;
+                }
+                throw new Error('SAFETY STOP: '+writes.length+' meaningful local differences. No entries uploaded or overwritten. Auto sync OFF. '+diffReport(diagnosticRows,metadataOnly,remote)+' Export a backup before making further changes.');
             }
             if (writes.length) await upload(t,writes);
             // No writes to local until all remote operations succeed.
@@ -15592,27 +15908,250 @@ if (pinBtn) {
             writeLocal(result);
             set('baseline',JSON.stringify(baseline));
             set('last_success',new Date().toISOString());
-            say('Synced '+merged.size+' shared entries ('+writes.length+' uploaded). Reload the page to refresh toolbar caches.');
+            say('Synced '+merged.size+' shared entries ('+writes.length+' uploaded; '+metadataOnly+' metadata-only differences ignored). Reload the page to refresh toolbar caches.');
         } catch(e) { say('Sync error: '+e.message); } finally { busy=false; }
+    }
+
+    // v364: Read-only comparison. No remote writes, no local writes, no baseline changes.
+    async function compareAndDownload() {
+        if (busy) return;
+        busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            const remote=await fetchRemote(t);
+            const local=flatten(readLocal());
+            const old=parse(get('baseline','{}'));
+            const ids=new Set([...local.keys(),...remote.keys()]);
+            const differences=[];
+            for (const id of ids) {
+                const localRow=local.get(id), remoteRow=remote.get(id);
+                if (localRow && remoteRow && sameMeaning(localRow.item_value,remoteRow.item_value) && !!localRow.deleted===!!remoteRow.deleted) continue;
+                const category=(localRow||remoteRow).category, key=(localRow||remoteRow).item_key;
+                const status=!localRow?'remote-only':!remoteRow?'local-only':'conflict';
+                differences.push({category,key,status,localValue:localRow?.item_value??null,remoteValue:remoteRow?.item_value??null,localDeleted:localRow?.deleted??null,remoteDeleted:remoteRow?.deleted??null,previousBaseline:old[id]??null});
+            }
+            const report={generatedAt:new Date().toISOString(),remoteCount:remote.size,localCount:local.size,counts:differences.reduce((o,x)=>{o[x.category]??={};o[x.category][x.status]=(o[x.category][x.status]||0)+1;return o;},{}),differences};
+            const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});
+            const link=document.createElement('a');link.href=window.URL.createObjectURL(blob);link.download='contact-toolbar-sync-comparison-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>window.URL.revokeObjectURL(link.href),30000);
+            say('Comparison saved: '+differences.length+' differences. No local or remote entries changed. Report contains learned data; keep it private.');
+        } catch(e) {say('Comparison error: '+e.message);} finally {busy=false;}
+    }
+    // v363: Download only keys absent locally. Never overwrite local values,
+    // propagate deletions, upload anything, or reset the sync baseline.
+    async function downloadMissingOnly() {
+        if (busy) return;
+        busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            const remote=await fetchRemote(t);
+            const data=readLocal(); const local=flatten(data);
+            let added=0, conflicts=0, deletedSkipped=0;
+            for (const [id,row] of remote) {
+                if (local.has(id)) {
+                    const here=local.get(id);
+                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) conflicts++;
+                    continue;
+                }
+                if (row.deleted || row.item_value?.deleted===true) {deletedSkipped++;continue;}
+                if (!Object.prototype.hasOwnProperty.call(CATEGORIES,row.category)) continue;
+                data[row.category][row.item_key]=row.item_value;
+                added++;
+            }
+            if (added) writeLocal(data);
+            say('Download-only: '+added+' missing entries added locally; '+conflicts+' conflicting entries left untouched; '+deletedSkipped+' remote deletions skipped. Zero uploads. Reload to refresh toolbar caches. Baseline unchanged.');
+        } catch(e) {say('Download-only error: '+e.message);} finally {busy=false;}
+    }
+    // v364: Explicitly reviewed, CREATE-ONLY uploads. Existing remote rows are
+    // NEVER updated, and deleted/tombstoned rows are NEVER resurrected.
+    // Baseline remains unchanged so routine Sync Now cannot silently adopt edits.
+    const REVIEW_BATCH_LIMIT = 10;
+    const REVIEW_FLAGGED = new Set(['CALGARY||MT','SACRAMENTO||ND']);
+    let reviewSnapshot = null;
+    function reviewId(row) { return row.category+'\u0000'+row.item_key; }
+    function reviewFlag(row) {
+        const value=row.item_value||{};
+        const cityKey=String(row.item_key||'').toUpperCase();
+        if (row.category==='learnedCities' && (REVIEW_FLAGGED.has(cityKey) ||
+            !/^[A-Z]{2}$/.test(String(value.state||'')))) return 'CHECK LOCATION';
+        if (row.category==='rejectedNames' && String(row.item_key||'').length<3) return 'CHECK NAME';
+        return '';
+    }
+    async function openUploadReview() {
+        if (busy) return;
+        busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            const remote=await fetchRemote(t);
+            const local=flatten(readLocal());
+            const candidates=[]; let conflicts=0, tombstones=0;
+            for (const [id,row] of local) {
+                if (remote.has(id)) { if (!sameMeaning(row.item_value,remote.get(id).item_value) || !!row.deleted!==!!remote.get(id).deleted) conflicts++; continue; }
+                if (row.deleted || row.item_value?.deleted===true) {tombstones++;continue;}
+                candidates.push(row);
+            }
+            candidates.sort((a,b)=>a.category.localeCompare(b.category)||a.item_key.localeCompare(b.item_key));
+            reviewSnapshot={candidates,remoteCount:remote.size};
+            const host=panel?.querySelector('[data-review]');
+            if (!host) throw new Error('Reopen the Team Sync panel and retry.');
+            host.replaceChildren();
+            const heading=document.createElement('p');
+            heading.textContent=candidates.length+' local-only entries available. '+conflicts+' existing-key conflicts excluded; '+tombstones+' deleted entries excluded. Select at most '+REVIEW_BATCH_LIMIT+' to CREATE remotely. No overwrites.';
+            host.appendChild(heading);
+            const list=document.createElement('div');list.style.cssText='height:210px;max-height:35vh;overflow-y:auto;overscroll-behavior:contain;border:1px solid #789;padding:6px;background:#223246';
+            for (const row of candidates) {
+                const line=document.createElement('label');line.style.cssText='display:block;padding:4px;border-bottom:1px solid #456;cursor:pointer';
+                const cb=document.createElement('input');cb.type='checkbox';cb.dataset.reviewId=reviewId(row);cb.style.marginRight='6px';
+                const flag=reviewFlag(row); if(flag) { cb.disabled=true; line.title='Flagged entry requires separate manual review; cannot upload from this tool.'; }
+                line.appendChild(cb);line.appendChild(document.createTextNode(row.category+': '+row.item_key+(flag?' — '+flag+' (blocked)':'')));
+                list.appendChild(line);
+            }
+            host.appendChild(list);
+            const btn=document.createElement('button');btn.textContent='Upload selected NEW entries (max '+REVIEW_BATCH_LIMIT+')';
+            btn.style.cssText='margin-top:8px;position:sticky;bottom:0;z-index:2;padding:8px;background:#e8f3ff;color:#142336;font-weight:bold;border:2px solid #6da9e5;border-radius:5px';btn.onclick=uploadReviewedSelection;host.appendChild(btn);
+            say('Review loaded: '+candidates.length+' new entries; '+conflicts+' conflicts protected. Select up to '+REVIEW_BATCH_LIMIT+' and verify before uploading.');
+        } catch(e) {say('Review error: '+e.message);} finally {busy=false;}
+    }
+    async function uploadReviewedSelection() {
+        if (busy) return;
+        const ids=[...(panel?.querySelectorAll('[data-review-id]:checked')||[])].map(el=>el.dataset.reviewId);
+        if (!ids.length) {say('Select one or more unflagged NEW entries first.');return;}
+        if (ids.length>REVIEW_BATCH_LIMIT) {say('Safety stop: select at most '+REVIEW_BATCH_LIMIT+' entries per batch.');return;}
+        const snapshot=reviewSnapshot;
+        if (!snapshot) {say('Review has expired; reopen review.');return;}
+        const chosen=ids.map(id=>snapshot.candidates.find(row=>reviewId(row)===id));
+        if (chosen.some(row=>!row||reviewFlag(row)||row.deleted||row.item_value?.deleted===true)) {say('Safety stop: selection includes an invalid or flagged entry.');return;}
+        if (!confirm('CREATE '+chosen.length+' selected NEW entries in Supabase? No existing records will be overwritten. Auto Sync stays OFF.')) return;
+        busy=true;
+        set('enabled',false);
+        if (panel?.isConnected) panel.querySelector('[data-auto]').checked=false;
+        let uploaded=0;
+        try {
+            const t=await token();await authorized(t);
+            // Re-fetch immediately before writing: reject keys added by the other computer.
+            let remote=await fetchRemote(t);
+            const current=flatten(readLocal());
+            for (const row of chosen) {
+                const id=reviewId(row), latest=current.get(id);
+                if (remote.has(id)) throw new Error('Remote key appeared since review: '+row.item_key+'. Stopped.');
+                if (!latest || latest.deleted || !sameMeaning(latest.item_value,row.item_value)) throw new Error('Local entry changed since review: '+row.item_key+'. Stopped.');
+            }
+            for (const row of chosen) {
+                // No upsert or merge-duplicates. Prefer return=representation, but
+                // independently verify stored content before proceeding.
+                await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',rowFor(row,identity()),t,{'Prefer':'return=representation'});
+                remote=await fetchRemote(t);
+                const stored=remote.get(reviewId(row));
+                if (!stored || !sameMeaning(stored.item_value,row.item_value) || !!stored.deleted!==!!row.deleted)
+                    throw new Error('Readback verification failed for '+row.item_key+'. '+uploaded+' prior entries verified; stop and export comparison.');
+                uploaded++;
+                say('Verified '+uploaded+' / '+chosen.length+' new entries. Zero overwrites.');
+            }
+            say('Reviewed upload complete: '+uploaded+' new entries verified. Zero overwrites; baseline unchanged; Auto Sync OFF. Reopen review for another batch.');
+            reviewSnapshot=null;
+            const host=panel?.querySelector('[data-review]');if(host)host.replaceChildren();
+        } catch(e) {say('Reviewed upload stopped after '+uploaded+' verified entries: '+e.message+' Auto Sync OFF.');}
+        finally {busy=false;}
+    }
+    // v366: Opt-in, conservative automatic CREATE-ONLY sync. It never invokes
+    // legacy syncNow(), never overwrites existing keys, and never propagates deletes.
+    // Initial snapshot deliberately excludes the pre-existing migration backlog.
+    const AUTO_NEW_SEEN_KEY = 'auto_new_seen_v366';
+    const AUTO_NEW_ENABLED_KEY = 'auto_new_enabled_v366';
+    const AUTO_NEW_LIMIT = 10;
+    let autoNewBusy = false;
+    async function enableAutoNew() {
+        if (busy || autoNewBusy) return;
+        busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            const remote=await fetchRemote(t);
+            if (!remote.size) throw new Error('Remote database is empty');
+            const local=flatten(readLocal());
+            const seen={};
+            for (const id of local.keys()) seen[id]=true;
+            // A key present remotely but absent locally must not be interpreted as
+            // a newly created local key after the first background download.
+            for (const id of remote.keys()) seen[id]=true;
+            set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
+            set(AUTO_NEW_ENABLED_KEY,true);
+            set('enabled',false); // legacy sync remains disabled
+            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog, conflicts, and deletions will NOT upload. New entries only; download missing entries every 2 minutes.');
+        } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
+        finally {busy=false;}
+    }
+    async function autoNewTick() {
+        if (busy || autoNewBusy || !get(AUTO_NEW_ENABLED_KEY,false)) return;
+        autoNewBusy=true; busy=true;
+        try {
+            const t=await token(); await authorized(t);
+            let remote=await fetchRemote(t);
+            if (!remote.size) throw new Error('Remote database is empty');
+            const data=readLocal(), local=flatten(data);
+            const seen=parse(get(AUTO_NEW_SEEN_KEY,'{}'));
+            // Only keys created locally AFTER activation qualify for upload.
+            const fresh=[...local].filter(([id,row])=>!seen[id] && !remote.has(id) && !row.deleted && !row.item_value?.deleted && !reviewFlag(row));
+            // Do not consume new keys if upload fails: retry next interval.
+            let uploaded=0;
+            for (const [id,row] of fresh.slice(0,AUTO_NEW_LIMIT)) {
+                // Recheck the remote key immediately before CREATE, without upsert.
+                remote=await fetchRemote(t);
+                if (remote.has(id)) {seen[id]=true;continue;}
+                const latest=flatten(readLocal()).get(id);
+                if (!latest || latest.deleted || !sameMeaning(latest.item_value,row.item_value)) continue;
+                await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',rowFor(row,identity()),t,{'Prefer':'return=representation'});
+                remote=await fetchRemote(t);
+                const stored=remote.get(id);
+                if (!stored || !sameMeaning(stored.item_value,row.item_value) || !!stored.deleted!==!!row.deleted) throw new Error('Readback failed for '+row.item_key);
+                seen[id]=true; uploaded++;
+                set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
+            }
+            // Protect existing local values; import only missing, nondeleted keys.
+            let downloaded=0,conflicts=0;
+            for (const [id,row] of remote) {
+                if (local.has(id)) {
+                    const here=local.get(id);
+                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) conflicts++;
+                    continue;
+                }
+                if (row.deleted || row.item_value?.deleted || !Object.prototype.hasOwnProperty.call(CATEGORIES,row.category)) continue;
+                data[row.category][row.item_key]=row.item_value;
+                seen[id]=true; downloaded++;
+            }
+            if (downloaded) writeLocal(data);
+            // Mark only entries that already existed remotely as seen; unresolved
+            // local-only entries remain eligible next time unless flagged.
+            for (const id of remote.keys()) seen[id]=true;
+            set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
+            say('Safe auto sync: '+uploaded+' new uploaded, '+downloaded+' missing downloaded, '+conflicts+' conflicts protected. No overwrites or deletions.'+(downloaded?' Reload page to refresh caches.':''));
+        } catch(e) {
+            set(AUTO_NEW_ENABLED_KEY,false);
+            say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
+        } finally {busy=false;autoNewBusy=false;}
     }
     function openPanel() {
         if (panel?.isConnected) { panel.remove(); panel=null; return; }
         panel=document.createElement('div');
-        panel.style.cssText='position:fixed;z-index:2147483647;right:16px;top:90px;width:355px;max-width:95vw;background:#172332;color:white;border:2px solid #6da9e5;border-radius:9px;padding:14px;font:13px Arial;box-shadow:0 4px 20px #0008';
-        panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button data-close style="float:right">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><label><input data-auto type="checkbox"> Enable automatic sync every 2 minutes</label></p><p style="font-size:11px">Start with backup export on every computer. Only upload the first backup to an EMPTY database. Other computers use Sync Now. Changes are stored locally and uploaded at the next sync. Reload after receiving changes.</p>';
+        panel.style.cssText='position:fixed;z-index:2147483647;right:16px;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;width:355px;max-width:95vw;background:#172332;color:white;border:2px solid #6da9e5;border-radius:9px;padding:14px;font:13px Arial;box-shadow:0 4px 20px #0008';
+        panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button data-close style="float:right">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><button data-download>Download Missing Only (safe)</button> <button data-compare>Export Comparison</button></p><p><button data-review-open>Review NEW Uploads (max 10 per batch)</button></p><div data-review></div><p><label><input data-auto-new type="checkbox"> Safe automatic sync (NEW entries only, every 2 minutes)</label></p><p style="font-size:11px">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p><p><label><input data-auto type="checkbox" disabled> Legacy full sync (disabled for safety)</label></p><p style="font-size:11px">Start with backup export on every computer. Only upload the first backup to an EMPTY database. Other computers use Sync Now. Changes are stored locally and uploaded at the next sync. Reload after receiving changes.</p>';
         document.body.appendChild(panel);
         panel.querySelector('[data-sync-status]').textContent=status;
-        panel.querySelector('[data-auto]').checked=!!get('enabled',false);
+        panel.querySelector('[data-auto]').checked=false;
+        panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-close]').onclick=()=>{panel.remove();panel=null;};
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
-        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set('session','{}');panel.querySelector('[data-auto]').checked=false;say('Signed out; auto sync OFF');};
+        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto]').checked=false;panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
         panel.querySelector('[data-now]').onclick=syncNow;
-        panel.querySelector('[data-auto]').onchange=e=>{set('enabled',!!e.target.checked);say(e.target.checked?'Auto sync ON — every 2 minutes':'Auto sync OFF');};
+        panel.querySelector('[data-download]').onclick=downloadMissingOnly;
+        panel.querySelector('[data-compare]').onclick=compareAndDownload;
+        panel.querySelector('[data-review-open]').onclick=openUploadReview;
+        panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected)panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',openPanel);
-    setInterval(()=>{if(get('enabled',false)&&!busy)syncNow();},120000);
-    console.info('Toolbar v339 team sync available via Tampermonkey menu (OFF by default).');
+    // v366: Never run the legacy overwrite-capable sync on a timer.
+    set('enabled',false);
+    setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},120000);
+    console.info('Toolbar v363 team sync available via Tampermonkey menu (OFF by default).');
 })();
 // ===== END TEAM SYNC BRIDGE =====
 
