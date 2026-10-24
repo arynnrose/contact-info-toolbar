@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.370
+// @version      9.6.371
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -15650,6 +15650,7 @@ if (pinBtn) {
 // ===== v359 TEAM SYNC BRIDGE: isolated from name/city/ZIP/email/phone rules =====
 // All network sync is opt-in. No applicant records or UI preferences are uploaded.
 (function installTeamSync() {
+    if (window !== window.top) return; // v371: only one sync UI in the top document
     const URL = 'https://iwznzjgvlthyqsnxrbyo.supabase.co';
     const KEY = 'sb_publishable_jD7qGUrlv07T9S4xUEDsrg_i7fMshs3';
     const ROOT = 'frt7_team_sync_v339_';
@@ -16128,55 +16129,77 @@ if (pinBtn) {
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
         } finally {busy=false;autoNewBusy=false;}
     }
-    // v370: One Team Sync panel per document. Detect older unmarked panels too.
-    const SYNC_PANEL_ID = 'contact-toolbar-team-sync-panel';
-    function allSyncPanels() {
-        return Array.from(document.querySelectorAll('body div')).filter(el => {
-            if (el.id === SYNC_PANEL_ID || el.hasAttribute('data-contact-toolbar-team-sync')) return true;
-            // Only top-level floating dialog roots, not nested content.
-            const heading = el.firstElementChild;
-            if (!heading || heading.tagName !== 'DIV') return false;
-            const label = (heading.firstChild?.textContent || '').trim();
-            return label === 'Contact Toolbar — Team Sync' &&
-                !!heading.querySelector('button[data-close]') &&
-                (el.style.position === 'fixed' || el.style.position === 'absolute');
-        });
-    }
+    // v371: isolated, top-frame-only dialog; no host-page CSS or nested iframe panels.
+    const SYNC_HOST_ID = 'contact-toolbar-sync-v371-host';
     function removeSyncPanels() {
-        for (const el of allSyncPanels()) el.remove();
+        // Remove all previously installed Team Sync dialogs, including v369/v370.
+        document.querySelectorAll('#'+SYNC_HOST_ID+',#contact-toolbar-team-sync-panel,[data-contact-toolbar-team-sync]').forEach(el=>el.remove());
+        for (const el of document.querySelectorAll('body > div, html > div')) {
+            if (el.style.position !== 'fixed') continue;
+            if (el.textContent?.includes('Contact Toolbar — Team Sync') && el.querySelector('[data-close]')) el.remove();
+        }
         panel = null;
     }
-    // Capture X clicks before host-page handlers, including buttons belonging to
-    // older dialog instances. Close ALL matching dialogs, not just the newest one.
-    document.addEventListener('click', event => {
-        const button = event.target?.closest?.('button[data-close]');
-        if (!button) return;
-        const root = button.closest('#' + SYNC_PANEL_ID + ',[data-contact-toolbar-team-sync]') ||
-            allSyncPanels().find(el => el.contains(button));
-        if (!root) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        removeSyncPanels();
-    }, true);
     function openPanel() {
         removeSyncPanels();
-        panel=document.createElement('div');
-        panel.id = SYNC_PANEL_ID;
-        panel.dataset.contactToolbarTeamSync = 'true';
-        panel.style.cssText='position:fixed;z-index:2147483647;right:16px;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;width:355px;max-width:95vw;background:#172332;color:white;border:2px solid #6da9e5;border-radius:9px;padding:14px;font:13px Arial;box-shadow:0 4px 20px #0008';
-        panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button type="button" data-close aria-label="Close Team Sync" style="float:right;position:relative;z-index:2;cursor:pointer;padding:3px 9px;background:#30475e;color:white;border:1px solid #8baac6;border-radius:4px">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><button data-download>Download Missing Only (safe)</button> <button data-compare>Export Comparison</button></p><p><button data-review-open>Review NEW Uploads (max 10 per batch)</button></p><div data-review></div><p><label><input data-auto-new type="checkbox"> Safe automatic sync (NEW entries only, every 2 minutes)</label></p><p style="font-size:11px">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p>';
-        document.body.appendChild(panel);
+        const host = document.createElement('div');
+        host.id = SYNC_HOST_ID;
+        host.style.cssText = 'all:initial!important;position:fixed!important;right:16px!important;top:16px!important;z-index:2147483647!important;display:block!important;pointer-events:auto!important;';
+        const shadow = host.attachShadow({mode:'open'});
+        const style = document.createElement('style');
+        style.textContent = `
+            :host { all:initial; color-scheme:dark; }
+            *, *::before, *::after { box-sizing:border-box; }
+            .dialog { width:390px;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);overflow:auto;
+                background:#172332;color:#f6f8ff;border:1px solid #74a8da;border-radius:12px;
+                box-shadow:0 12px 40px #0009;padding:18px;font:13px/1.45 Arial,sans-serif;pointer-events:auto; }
+            .heading { display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px; }
+            h2 {font:700 17px Arial;margin:0;color:white;}
+            .close {font-size:20px;font-weight:bold;min-width:38px;min-height:36px;cursor:pointer;
+                background:#344a64;color:white;border:1px solid #8ca9c7;border-radius:7px;}
+            .close:hover {background:#567393;}
+            .field {display:block;margin:12px 0;font-weight:bold;}
+            .field input {display:block;width:100%;padding:8px;margin-top:5px;border-radius:5px;border:1px solid #9aafc8;
+                background:#fff;color:#111;font:14px Arial;}
+            .actions {display:flex;gap:7px;flex-wrap:wrap;margin:10px 0;}
+            button:not(.close) {padding:7px 10px;background:#30465e;color:white;border:1px solid #8ca9c7;
+                border-radius:6px;cursor:pointer;font:13px Arial;}
+            button:not(.close):hover {background:#466584;}
+            hr {border:0;border-top:1px solid #536478;margin:16px 0;}
+            .note {font-size:12px;color:#cbd7e7;margin-top:12px;}
+            .toggle {display:flex;gap:8px;align-items:flex-start;margin-top:14px;}
+            .toggle input {margin-top:3px;}
+            .status {font-size:12px;color:#c9e2ff;min-height:18px;}
+            [data-review] {max-height:250px;overflow:auto;}
+        `;
+        shadow.appendChild(style);
+        panel = document.createElement('section');
+        panel.className = 'dialog';
+        panel.setAttribute('role','dialog');
+        panel.setAttribute('aria-label','Contact Toolbar Team Sync');
+        panel.innerHTML = `
+          <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
+          <div class="status" data-sync-status></div>
+          <label class="field">Email<input data-email type="email" autocomplete="username"></label>
+          <label class="field">Password<input data-pass type="password" autocomplete="current-password"></label>
+          <div class="actions"><button data-login>Sign in</button><button data-logout>Sign out</button></div>
+          <hr>
+          <label class="field">Seed empty database from backup:<input data-file type="file" accept=".json,application/json"></label>
+          <div class="actions"><button data-seed>Upload backup (once)</button><button data-now>Sync Now</button></div>
+          <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
+          <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button></div>
+          <div data-review></div>
+          <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (NEW entries only, every 2 minutes)</b></label>
+          <p class="note">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p>
+        `;
+        shadow.appendChild(panel);
+        document.documentElement.appendChild(host);
+        const close = e => {e?.preventDefault();e?.stopPropagation();removeSyncPanels();host.remove();};
+        panel.querySelector('[data-close]').addEventListener('pointerdown', close, true);
+        panel.querySelector('[data-close]').addEventListener('click', close, true);
+        shadow.addEventListener('keydown', e => {if(e.key==='Escape')close(e);},true);
         panel.querySelector('[data-sync-status]').textContent=status;
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
-        // Direct fallback if a browser extension intercepts document clicks.
-        panel.querySelector('[data-close]').addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            removeSyncPanels();
-        }, true);
-        panel.addEventListener('keydown', event => {
-            if (event.key === 'Escape') { event.preventDefault(); removeSyncPanels(); }
-        });
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
         panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
