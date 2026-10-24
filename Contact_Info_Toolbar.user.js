@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.387
+// @version      9.6.388
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16368,6 +16368,28 @@ if (pinBtn) {
             target.appendChild(notice);
         }
     }
+    // v388: Last successful automatic sync is persisted per browser and
+    // displayed live while the Team Sync dialog remains open.
+    const LAST_AUTO_SYNC_KEY = 'last_auto_sync_success_v388';
+    const LAST_AUTO_SYNC_ERROR_KEY = 'last_auto_sync_error_v388';
+    function renderLastAutoSync() {
+        if (!panel?.isConnected) return;
+        const el=panel.querySelector('[data-last-auto-sync]');
+        if (!el) return;
+        const enabled=!!get(AUTO_NEW_ENABLED_KEY,false);
+        const stamp=Number(get(LAST_AUTO_SYNC_KEY,0));
+        let line='Last successful auto sync: Never on this computer';
+        if (Number.isFinite(stamp) && stamp>0) {
+            const elapsed=Math.max(0,Math.floor((Date.now()-stamp)/1000));
+            const ago=elapsed<60?elapsed+'s ago':elapsed<3600?Math.floor(elapsed/60)+'m ago':Math.floor(elapsed/3600)+'h ago';
+            line='Last successful auto sync: '+new Date(stamp).toLocaleTimeString()+' ('+ago+')';
+        }
+        const problem=String(get(LAST_AUTO_SYNC_ERROR_KEY,'')||'');
+        el.textContent=line+(autoNewBusy?' · Syncing now…':enabled?' · Auto sync ON':' · Auto sync OFF')+
+            (problem?' · Last error: '+problem:'');
+        el.style.color=problem?'#ffd58a':'#bde8c8';
+    }
+    setInterval(renderLastAutoSync,1000);
     async function autoNewTick() {
         if (busy || autoNewBusy || !get(AUTO_NEW_ENABLED_KEY,false)) return;
         autoNewBusy=true; busy=true;
@@ -16473,9 +16495,14 @@ if (pinBtn) {
             // Snapshot only after all remote writes and local imports have succeeded.
             set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(flatten(data))));
             storeConflictReport([...conflictDetails.values()]);
+            set(LAST_AUTO_SYNC_KEY,Date.now());
+            set(LAST_AUTO_SYNC_ERROR_KEY,'');
+            renderLastAutoSync();
             say('Safe auto sync: '+uploaded+' new uploaded, '+downloaded+' missing downloaded, '+conflicts+' conflicts protected; '+deletesUploaded+' deletions uploaded, '+deletesDownloaded+' deletions downloaded, '+deleteConflicts+' deletion conflicts protected. No other overwrites.'+((downloaded||deletesDownloaded)?' Reload page to refresh caches.':''));
         } catch(e) {
             set(AUTO_NEW_ENABLED_KEY,false);
+            set(LAST_AUTO_SYNC_ERROR_KEY,String(e.message||e));
+            renderLastAutoSync();
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
         } finally {busy=false;autoNewBusy=false;}
     }
@@ -16589,6 +16616,7 @@ if (pinBtn) {
         panel.innerHTML = `
           <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
           <div class="status" data-sync-status></div>
+          <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (every 30 seconds)</b></label>
           <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
@@ -16640,6 +16668,7 @@ if (pinBtn) {
             if (event.key === 'Escape') closePanel(event);
         });
         panel.querySelector('[data-sync-status]').textContent=status;
+        renderLastAutoSync();
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
         panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
