@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.383
+// @version      9.6.384
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -1087,8 +1087,12 @@ function isUsableTenDigitPhone(digits) {
     function removeCustomAreaCode(areaCode) {
         const area = normalizeCustomAreaCode(areaCode);
         if (!area || !Object.prototype.hasOwnProperty.call(customAreaCodesCache, area)) return false;
-        delete customAreaCodesCache[area];
+        const existing = customAreaCodesCache[area];
+        if (existing?.deleted === true) return false;
+        // Retain an explicit tombstone so the other computer can receive it.
+        customAreaCodesCache[area] = {...existing, deleted:true, deletedAt:Date.now()};
         saveCustomAreaCodes();
+        queueExplicitSyncDeletion('customAreaCodes',area);
         return true;
     }
 
@@ -1510,7 +1514,7 @@ function isUsableTenDigitPhone(digits) {
 
     // v376: Persist explicit X deletions even while automatic sync is OFF.
     function queueExplicitSyncDeletion(category, key) {
-        if (!key || !['learnedCities','rejectedNames'].includes(category)) return;
+        if (!key || !['learnedCities','rejectedNames','customAreaCodes'].includes(category)) return;
         const storageKey='frt7_team_sync_v339_pending_explicit_deletes_v376';
         let queue={};try{queue=JSON.parse(GM_getValue(storageKey,'{}')||'{}');}catch(_){}
         queue[category+'\u0000'+key]={category,item_key:key,recordedAt:Date.now()};
@@ -11979,7 +11983,9 @@ function renderCustomAreaCodesSettings() {
     if (!list) return;
     loadCustomAreaCodes();
     list.innerHTML = "";
-    const entries = Object.entries(customAreaCodesCache).sort(([a],[b]) => a.localeCompare(b));
+    const entries = Object.entries(customAreaCodesCache)
+        .filter(([,value]) => value && value.deleted !== true)
+        .sort(([a],[b]) => a.localeCompare(b));
     if (!entries.length) {
         const empty = document.createElement("div");
         empty.textContent = "No custom area codes yet.";
@@ -15682,8 +15688,14 @@ if (pinBtn) {
     function say(message) { status = message; console.info('[Toolbar Team Sync]', message); if (panel) { const el = panel.querySelector('[data-sync-status]'); if (el) el.textContent = message; } }
     function readLocal() { const result = {}; for (const [cat,key] of Object.entries(CATEGORIES)) result[cat] = parse(GM_getValue(key,'{}')); return result; }
     function writeLocal(data) {
-        // Preserve existing key formats. Reload the page to refresh the toolbar's in-memory caches.
+        // Keep live Settings lists and lookup caches consistent with downloaded records.
         for (const [cat,key] of Object.entries(CATEGORIES)) GM_setValue(key, JSON.stringify(data[cat] || {}));
+        learnedCitiesCache = parseLearnedCitiesStore(GM_getValue(LEARNED_CITIES_SINGLE_DB_KEY,'{}'));
+        loadCustomAreaCodes();
+        if (settingsPanel?.isConnected) {
+            try { renderLearnedCitiesSettings(); } catch(e) { console.warn('City list refresh:',e); }
+            try { renderCustomAreaCodesSettings(); } catch(e) { console.warn('Area list refresh:',e); }
+        }
     }
     function request(method, path, body, token, headers = {}) {
         return new Promise((resolve,reject) => GM_xmlhttpRequest({
@@ -16074,7 +16086,7 @@ if (pinBtn) {
     // v375: explicit deletion transitions only; never infer deletion from a missing key.
     // First run establishes a baseline, so historical deletions cannot be replayed.
     const DELETE_SNAPSHOT_KEY = 'safe_delete_snapshot_v375';
-    const DELETE_CATEGORIES = new Set(['rejectedNames','learnedCities']);
+    const DELETE_CATEGORIES = new Set(['rejectedNames','learnedCities','customAreaCodes']);
     const MAX_DELETE_WRITES = 10;
     const isDeleted = row => !!(row?.deleted || row?.item_value?.deleted);
     const snapshotLocal = local => {
@@ -16235,7 +16247,7 @@ if (pinBtn) {
             if (get(DELETE_SNAPSHOT_KEY,null)===null) set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(local)));
             set(AUTO_NEW_ENABLED_KEY,true);
             set('enabled',false); // legacy sync remains disabled
-            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town deletions sync; new entries and safe downloads continue every 30 seconds.');
+            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town/area-code deletions sync; new entries and safe downloads continue every 30 seconds.');
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
         finally {busy=false;}
     }
@@ -16467,7 +16479,7 @@ if (pinBtn) {
             <label class="field">Seed empty database from backup:<input data-file type="file" accept=".json,application/json"></label>
             <div class="actions"><button data-seed>Upload backup (once)</button></div>
           </details>
-          <p class="note">New entries and explicit name/town deletions sync automatically. Existing conflicts are protected.</p>
+          <p class="note">New entries and explicit name/town/area-code deletions sync automatically. Existing conflicts are protected.</p>
         `;
         shadow.appendChild(panel);
         document.documentElement.appendChild(host);
@@ -16694,7 +16706,8 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
         directCustomAreaCodes = {};
     }
 
-    const info = directCustomAreaCodes[area] || AREA_CODE_LOOKUP[area];
+    const customInfo = directCustomAreaCodes[area];
+    const info = (customInfo && customInfo.deleted !== true ? customInfo : null) || AREA_CODE_LOOKUP[area];
     if (!info) return false;
 
     const c = document.getElementById("txtCityDataEntry");
