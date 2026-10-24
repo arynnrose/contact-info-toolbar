@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.378
+// @version      9.6.379
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16102,6 +16102,68 @@ if (pinBtn) {
         if (!verified?.deleted || !verified.item_value?.deleted)
             throw new Error('Deletion readback failed or changed concurrently for '+remoteRow.item_key);
     }
+    // v379: Shared audit records are stored as separate rows in the existing
+    // Supabase table. This does not change any learned-data row or sync rules.
+    const ACTIVITY_CATEGORY='__sync_activity_v379';
+    const DEVICE_KEY='shared_activity_device_v379';
+    const DEVICE_LABEL_KEY='shared_activity_label_v379';
+    let deviceId=get(DEVICE_KEY,'');
+    if (!deviceId) {
+        deviceId='PC-'+(typeof crypto!=='undefined' && crypto.randomUUID
+            ? crypto.randomUUID().slice(0,8) : Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6));
+        set(DEVICE_KEY,deviceId);
+    }
+    const deviceLabel=()=>String(get(DEVICE_LABEL_KEY,deviceId)||deviceId).slice(0,60);
+    function activityEntry(row) {
+        const v=row?.item_value||{};
+        return {time:v.time||row.updated_at||'',device:v.device||'Unknown',
+            action:v.action||'Unknown',category:v.category||'',entry:v.entry||'',
+            detail:v.detail||'',result:v.result||'Success'};
+    }
+    async function recordActivity(t,action,row,detail='') {
+        // Logging must never block or roll back a successful sync operation.
+        try {
+            const key=Date.now().toString(36)+'-'+deviceId+'-'+Math.random().toString(36).slice(2,9);
+            const item_value={time:new Date().toISOString(),device:deviceLabel(),
+                deviceId,action,category:row.category,entry:row.item_key,
+                detail:String(detail).slice(0,160),result:'Success'};
+            await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',
+                {category:ACTIVITY_CATEGORY,item_key:key,item_value,deleted:false,updated_by:identity()},
+                t,{'Prefer':'return=minimal'});
+        } catch(error) { console.warn('[Team Sync activity] Could not publish audit event:',error.message); }
+    }
+    async function showSharedActivity() {
+        const container=panel?.querySelector('[data-activity]');
+        if (!container) return;
+        container.hidden=false;
+        container.textContent='Loading shared activity...';
+        try {
+            const t=await token();await authorized(t);
+            const path='/rest/v1/toolbar_shared_items?category=eq.'+
+                encodeURIComponent(ACTIVITY_CATEGORY)+
+                '&select=item_value,updated_at&order=updated_at.desc&limit=100';
+            const response=await request('GET',path,null,t);
+            if (!Array.isArray(response.data)) throw new Error('Unexpected log response');
+            container.replaceChildren();
+            const heading=document.createElement('div');
+            heading.textContent='Shared activity — newest 100 events (UTC timestamps)';
+            heading.style.fontWeight='bold';container.appendChild(heading);
+            if (!response.data.length) {
+                const empty=document.createElement('p');
+                empty.textContent='No shared activity recorded yet. Only events after v379 are logged.';
+                container.appendChild(empty);
+            }
+            for (const row of response.data) {
+                const e=activityEntry(row),item=document.createElement('div');
+                item.className='activity-row';
+                const time=Date.parse(e.time);
+                const stamp=Number.isFinite(time)?new Date(time).toLocaleString():e.time;
+                item.textContent=stamp+' | '+e.device+' | '+e.action+
+                    ' | '+e.category+': '+e.entry+(e.detail?' | '+e.detail:'');
+                container.appendChild(item);
+            }
+        } catch(error) {container.textContent='Could not load shared log: '+error.message;}
+    }
     let autoNewBusy = false;
     async function enableAutoNew() {
         if (busy || autoNewBusy) return;
@@ -16148,6 +16210,7 @@ if (pinBtn) {
                 const stored=remote.get(id);
                 if (!stored || !sameMeaning(stored.item_value,row.item_value) || !!stored.deleted!==!!row.deleted) throw new Error('Readback failed for '+row.item_key);
                 seen[id]=true; uploaded++;
+                await recordActivity(t,'Added (uploaded)',row);
                 set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
             }
             // v375: propagate only observed active -> deleted transitions.
@@ -16176,6 +16239,7 @@ if (pinBtn) {
                 await publishDeletion(t,existing,localRow);
                 delete pending[id];set(pendingKey,JSON.stringify(pending));
                 deletesUploaded++;
+                await recordActivity(t,'Deleted (uploaded)',row);
                 remote=await fetchRemote(t);
             }
             // Download remote tombstones only for identical active records.
@@ -16190,6 +16254,7 @@ if (pinBtn) {
                 data[row.category][row.item_key]={...here.item_value,deleted:true,
                     deletedAt:row.item_value?.deletedAt||Date.now()};
                 deletesDownloaded++;
+                await recordActivity(t,'Deletion received',row);
             }
             // Protect existing local values; import only missing, nondeleted keys.
             let downloaded=0,conflicts=0;
@@ -16202,6 +16267,7 @@ if (pinBtn) {
                 if (row.deleted || row.item_value?.deleted || !Object.prototype.hasOwnProperty.call(CATEGORIES,row.category)) continue;
                 data[row.category][row.item_key]=row.item_value;
                 seen[id]=true; downloaded++;
+                await recordActivity(t,'Added (downloaded)',row);
             }
             if (downloaded || deletesDownloaded) writeLocal(data);
             // Mark only entries that already existed remotely as seen; unresolved
@@ -16251,6 +16317,7 @@ if (pinBtn) {
                     skipped++;continue;
                 }
                 await publishDeletion(t,existing,row);
+                await recordActivity(t,'Deleted (approved manually)',row);
                 const pending=parse(get('pending_explicit_deletes_v376','{}'));
                 if (pending[id]) {delete pending[id];set('pending_explicit_deletes_v376',JSON.stringify(pending));}
                 approved++;
@@ -16308,6 +16375,10 @@ if (pinBtn) {
             .toggle {display:flex;gap:8px;align-items:flex-start;margin-top:14px;}
             .toggle input {margin-top:3px;}
             .status {font-size:12px;color:#c9e2ff;min-height:18px;}
+            .activity {border:1px solid #536478;border-radius:6px;padding:10px;
+                max-height:290px;overflow:auto;margin:8px 0;font-size:12px;}
+            .activity-row {padding:7px 0;border-bottom:1px solid #42546b;overflow-wrap:anywhere;}
+            .activity-row:last-child {border-bottom:0;}
             [data-review] {max-height:250px;overflow:auto;}
         `;
         shadow.appendChild(style);
@@ -16326,6 +16397,9 @@ if (pinBtn) {
           <div class="actions"><button data-seed>Upload backup (once)</button><button data-now>Sync Now</button></div>
           <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
           <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button><button data-review-deletes>Review Previous Deletions</button></div>
+          <div class="actions"><button data-activity-open>View Shared Activity Log</button></div>
+          <label class="field">This computer's log name<input data-device-label type="text" maxlength="60" placeholder="e.g. Main PC"></label>
+          <div class="activity" data-activity hidden></div>
           <div data-review></div>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (new entries + name/town deletions, every 2 minutes)</b></label>
           <p class="note">Existing backlog and conflicts remain protected. Only deliberate name/town deletions after activation sync automatically. Other edits are never overwritten. To share existing local-only entries, use Review NEW Uploads.</p>
@@ -16364,6 +16438,10 @@ if (pinBtn) {
         panel.querySelector('[data-compare]').onclick=compareAndDownload;
         panel.querySelector('[data-review-open]').onclick=openUploadReview;
         panel.querySelector('[data-review-deletes]').onclick=()=>void reviewPriorDeletions();
+        panel.querySelector('[data-activity-open]').onclick=()=>void showSharedActivity();
+        const labelInput=panel.querySelector('[data-device-label]');
+        labelInput.value=deviceLabel();
+        labelInput.addEventListener('change',()=>set(DEVICE_LABEL_KEY,labelInput.value.trim()||deviceId));
         panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected)panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
