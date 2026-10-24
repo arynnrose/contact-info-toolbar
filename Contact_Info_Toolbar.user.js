@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.384
+// @version      9.6.385
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -12008,7 +12008,10 @@ function renderCustomAreaCodesSettings() {
         remove.title = `Remove custom area code ${area}`;
         remove.addEventListener("click", event => {
             event.preventDefault(); event.stopPropagation();
-            removeCustomAreaCode(area);
+            if (removeCustomAreaCode(area)) {
+                row.remove();
+                refreshSettingsListsFromStorage(true);
+            }
         });
         row.append(label, remove);
         list.appendChild(row);
@@ -12026,6 +12029,7 @@ function addCustomAreaCodeFromSettings() {
         status.style.color = result.ok ? "#16821b" : "#b00020";
     }
     if (!result.ok) return;
+    refreshSettingsListsFromStorage(true);
     if (areaInput) areaInput.value = "";
     if (cityInput) cityInput.value = "";
     if (stateInput) stateInput.value = "";
@@ -12047,8 +12051,34 @@ for (const id of ["#frt7-custom-area-code", "#frt7-custom-area-city", "#frt7-cus
 }
 renderCustomAreaCodesSettings();
 
+// v385: Watch persisted data while Settings is open. This catches updates
+// from direct X handlers, other toolbar callbacks, and incoming Team Sync,
+// even when those paths don't call the renderer.
+let liveCityRevision = null;
+let liveAreaRevision = null;
+function refreshSettingsListsFromStorage(force=false) {
+    if (!settingsPanel?.isConnected) return;
+    const cityRaw=String(GM_getValue(LEARNED_CITIES_SINGLE_DB_KEY,'{}')||'{}');
+    const areaRaw=String(GM_getValue(CUSTOM_AREA_CODES_KEY,'{}')||'{}');
+    if (force || cityRaw!==liveCityRevision) {
+        liveCityRevision=cityRaw;
+        try {
+            learnedCitiesCache=parseLearnedCitiesStore(cityRaw);
+            renderLearnedCitiesSettings();
+        } catch(error) { console.warn('Live city settings refresh failed:',error); }
+    }
+    if (force || areaRaw!==liveAreaRevision) {
+        liveAreaRevision=areaRaw;
+        try {
+            loadCustomAreaCodes();
+            renderCustomAreaCodesSettings();
+        } catch(error) { console.warn('Live area-code settings refresh failed:',error); }
+    }
+}
+setInterval(()=>refreshSettingsListsFromStorage(),600);
+
 function renderLearnedCitiesSettings() {
-        const container = document.getElementById("frt7-learned-cities-list");
+        const container = settingsPanel.querySelector("#frt7-learned-cities-list");
         if (!container) return;
 
         container.innerHTML = "";
@@ -12099,6 +12129,7 @@ function renderLearnedCitiesSettings() {
 
                 cityInput.value = "";
                 stateInput.value = "";
+                refreshSettingsListsFromStorage(true);
             };
 
             addBtn.addEventListener("click", runAdd);
@@ -12204,7 +12235,7 @@ function renderLearnedCitiesSettings() {
 
                     learnedCitiesCache = verify;
                     console.info(`Toolbar trusted cities v60: ${label.textContent} = DELETED (direct X verified).`);
-                    renderLearnedCitiesSettings();
+                    refreshSettingsListsFromStorage(true);
                 } catch (error) {
                     console.error("Toolbar trusted city direct-X removal failed:", error);
                     renderLearnedCitiesSettings();
@@ -15692,10 +15723,7 @@ if (pinBtn) {
         for (const [cat,key] of Object.entries(CATEGORIES)) GM_setValue(key, JSON.stringify(data[cat] || {}));
         learnedCitiesCache = parseLearnedCitiesStore(GM_getValue(LEARNED_CITIES_SINGLE_DB_KEY,'{}'));
         loadCustomAreaCodes();
-        if (settingsPanel?.isConnected) {
-            try { renderLearnedCitiesSettings(); } catch(e) { console.warn('City list refresh:',e); }
-            try { renderCustomAreaCodesSettings(); } catch(e) { console.warn('Area list refresh:',e); }
-        }
+        if (settingsPanel?.isConnected) refreshSettingsListsFromStorage(true);
     }
     function request(method, path, body, token, headers = {}) {
         return new Promise((resolve,reject) => GM_xmlhttpRequest({
