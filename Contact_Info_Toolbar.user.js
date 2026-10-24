@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.377
+// @version      9.6.378
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -1534,7 +1534,7 @@ function isUsableTenDigitPhone(digits) {
         saveRejectedAutoNames();
 
         const verify = parseRejectedNameStoreObject(GM_getValue(REJECTED_AUTO_NAMES_SINGLE_DB_KEY));
-        if (verify[exactKey]?.deleted !== true) {
+        if (verify[normalized]?.deleted !== true) {
             console.error(`Toolbar rejected names: v24 delete verification FAILED for "${displayName}".`);
             return false;
         }
@@ -12480,13 +12480,13 @@ function renderRejectedAutoNamesSettings() {
                 const verify = parseRejectedNameStoreObject(
                     GM_getValue(REJECTED_AUTO_NAMES_SINGLE_DB_KEY)
                 );
-                if (verify[exactKey]?.deleted !== true) {
+                if (verify[normalized]?.deleted !== true) {
                     removalHandled = false;
                     updateRejectedNameDiagnostic(`${entry.name} DELETE FAILED - DB still active`);
                     throw new Error(`Direct X write verification failed for ${entry.name}.`);
                 }
 
-                queueExplicitSyncDeletion('rejectedNames', exactKey);
+                queueExplicitSyncDeletion('rejectedNames', normalized);
                 rejectedAutoNamesCache = verify;
                 window.__frt7_rejected_last_diag = `${entry.name} = DELETED (direct X verified)`;
                 updateRejectedNameDiagnostic(window.__frt7_rejected_last_diag);
