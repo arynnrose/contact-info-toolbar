@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.388
+// @version      9.6.390
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -15715,7 +15715,7 @@ if (pinBtn) {
     const set = (k, value) => GM_setValue(ROOT + k, value);
     const parse = x => { try { const v = typeof x === 'string' ? JSON.parse(x || '{}') : x; return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (_) { return {}; } };
     const stable = x => JSON.stringify(x === undefined ? null : x);
-    let busy = false, status = 'Sync OFF (local data only)', panel;
+    let busy = false, status = 'Automatic sync status pending', panel;
     function say(message) { status = message; console.info('[Toolbar Team Sync]', message); if (panel) { const el = panel.querySelector('[data-sync-status]'); if (el) el.textContent = message; } }
     function readLocal() { const result = {}; for (const [cat,key] of Object.entries(CATEGORIES)) result[cat] = parse(GM_getValue(key,'{}')); return result; }
     function writeLocal(data) {
@@ -16323,6 +16323,55 @@ if (pinBtn) {
         } catch(error) {say('Area-code restoration stopped: '+error.message);}
         finally {busy=false;}
     }
+    // v390: Build a fresh read-only report from both data sets when requested.
+    // This does not depend on cached diagnostic entries or change sync state.
+    let conflictInspectionBusy=false;
+    async function inspectSyncConflicts() {
+        const target=panel?.querySelector('[data-conflict-report]');
+        if (!target || conflictInspectionBusy) return;
+        conflictInspectionBusy=true;
+        target.hidden=false;
+        target.textContent='Checking this computer against shared records...';
+        try {
+            const t=await token();await authorized(t);
+            const remote=await fetchRemote(t);
+            const local=flatten(readLocal());
+            const found=new Map();
+            const note=(id,row,reason)=>{
+                found.set(id+'|'+reason,{category:row.category,item_key:row.item_key,
+                    key:row.item_key,reason});
+            };
+            for (const [id,shared] of remote) {
+                const here=local.get(id);
+                if (!here) continue;
+                if (sameMeaning(here.item_value,shared.item_value) &&
+                    !!here.deleted===!!shared.deleted) continue;
+                const localDeleted=isDeleted(here), remoteDeleted=isDeleted(shared);
+                const reason=localDeleted!==remoteDeleted
+                    ? (remoteDeleted
+                        ? 'Shared entry is DELETED, but this computer has an active entry. Re-adding requires explicit restoration.'
+                        : 'Local entry is DELETED but shared entry is active; protected.')
+                    : 'Different saved values on both computers; local version preserved.';
+                note(id,shared,reason);
+            }
+            const pending=parse(get('pending_explicit_deletes_v376','{}'));
+            for (const [id,entry] of Object.entries(pending)) {
+                if (!DELETE_CATEGORIES.has(entry.category)) continue;
+                const here=local.get(id), shared=remote.get(id);
+                if (!here || !isDeleted(here))
+                    note(id,entry,'Pending deletion not confirmed in local storage; no deletion sent.');
+                else if (!shared)
+                    note(id,entry,'Pending deletion has no matching shared record; no deletion sent.');
+                else if (!isDeleted(shared) &&
+                    !sameMeaning(activeMeaning(here.item_value),activeMeaning(shared.item_value)))
+                    note(id,here,'Pending deletion differs from shared entry; no deletion sent.');
+            }
+            storeConflictReport([...found.values()]);
+            renderConflictReport();
+        } catch(error) {
+            target.textContent='Could not inspect conflicts: '+String(error.message||error);
+        } finally {conflictInspectionBusy=false;}
+    }
     function renderConflictReport() {
         if (!panel?.isConnected) return;
         const target=panel.querySelector('[data-conflict-report]');
@@ -16338,6 +16387,16 @@ if (pinBtn) {
             ? 'Last completed check: '+new Date(report.time).toLocaleString()
             : 'No completed sync check recorded yet.';
         target.appendChild(stamp);
+        const summary=document.createElement('div');
+        summary.style.margin='8px 0';
+        summary.textContent=total+' protected conflict entr'+(total===1?'y':'ies')+
+            ' in last report; '+items.length+' detail row(s) saved.';
+        target.appendChild(summary);
+        if (total && !items.length) {
+            const warning=document.createElement('p');
+            warning.textContent='The saved conflict details are missing. Click View Sync Conflicts again to rebuild the list.';
+            target.appendChild(warning);
+        }
         if (!total) {
             const empty=document.createElement('p');
             empty.textContent='No conflicts in the last completed sync check.';
@@ -16667,7 +16726,16 @@ if (pinBtn) {
         shadow.addEventListener('keydown', event => {
             if (event.key === 'Escape') closePanel(event);
         });
-        panel.querySelector('[data-sync-status]').textContent=status;
+        // The legacy manual-sync status is not the automatic-sync state.
+        // Do not show its stale 'Sync OFF' message while auto sync is enabled.
+        const autoEnabledOnOpen=!!get(AUTO_NEW_ENABLED_KEY,false);
+        const oldOffStatus=/^Sync OFF \(local data only\)$/.test(status);
+        panel.querySelector('[data-sync-status]').textContent=
+            autoEnabledOnOpen && (oldOffStatus || status==='Automatic sync status pending')
+                ? 'Automatic sync ON — waiting for the next completed check.'
+                : !autoEnabledOnOpen && (oldOffStatus || status==='Automatic sync status pending')
+                    ? 'Automatic sync OFF (local data only)'
+                    : status;
         renderLastAutoSync();
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
@@ -16680,8 +16748,8 @@ if (pinBtn) {
         panel.querySelector('[data-review-deletes]').onclick=()=>void reviewPriorDeletions();
         panel.querySelector('[data-conflicts-open]').onclick=()=>{
             const report=panel.querySelector('[data-conflict-report]');
-            report.hidden=!report.hidden;
-            if (!report.hidden) renderConflictReport();
+            if (!report.hidden) {report.hidden=true;return;}
+            void inspectSyncConflicts();
         };
         renderConflictReport();
         panel.querySelector('[data-activity-open]').onclick=()=>void showSharedActivity();
@@ -16705,7 +16773,7 @@ if (pinBtn) {
         labelInput.addEventListener('blur',saveDeviceLabel);
         labelInput.addEventListener('change',saveDeviceLabel);
         labelStatus.textContent='Current name: '+deviceLabel();
-        panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected)panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');}};
+        panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected){panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);renderLastAutoSync();}});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');renderLastAutoSync();}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
     // v366: Never run the legacy overwrite-capable sync on a timer.
