@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.379
+// @version      9.6.381
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16182,7 +16182,7 @@ if (pinBtn) {
             if (get(DELETE_SNAPSHOT_KEY,null)===null) set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(local)));
             set(AUTO_NEW_ENABLED_KEY,true);
             set('enabled',false); // legacy sync remains disabled
-            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town deletions sync; new entries and safe downloads continue every 2 minutes.');
+            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town deletions sync; new entries and safe downloads continue every 30 seconds.');
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
         finally {busy=false;}
     }
@@ -16379,6 +16379,9 @@ if (pinBtn) {
                 max-height:290px;overflow:auto;margin:8px 0;font-size:12px;}
             .activity-row {padding:7px 0;border-bottom:1px solid #42546b;overflow-wrap:anywhere;}
             .activity-row:last-child {border-bottom:0;}
+            .advanced {margin-top:16px;border-top:1px solid #536478;padding-top:12px;}
+            .advanced summary {cursor:pointer;font-weight:700;padding:8px 0;color:#d9e9ff;}
+            .advanced[open] summary {margin-bottom:8px;}
             [data-review] {max-height:250px;overflow:auto;}
         `;
         shadow.appendChild(style);
@@ -16393,16 +16396,22 @@ if (pinBtn) {
           <label class="field">Password<input data-pass type="password" autocomplete="current-password"></label>
           <div class="actions"><button data-login>Sign in</button><button data-logout>Sign out</button></div>
           <hr>
-          <label class="field">Seed empty database from backup:<input data-file type="file" accept=".json,application/json"></label>
-          <div class="actions"><button data-seed>Upload backup (once)</button><button data-now>Sync Now</button></div>
-          <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
-          <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button><button data-review-deletes>Review Previous Deletions</button></div>
+          <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (every 30 seconds)</b></label>
           <div class="actions"><button data-activity-open>View Shared Activity Log</button></div>
-          <label class="field">This computer's log name<input data-device-label type="text" maxlength="60" placeholder="e.g. Main PC"></label>
+          <label class="field">This computer's log name (future entries)<input data-device-label type="text" maxlength="60" placeholder="e.g. Main PC"></label>
+          <div class="status" data-device-save-status aria-live="polite"></div>
           <div class="activity" data-activity hidden></div>
-          <div data-review></div>
-          <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (new entries + name/town deletions, every 2 minutes)</b></label>
-          <p class="note">Existing backlog and conflicts remain protected. Only deliberate name/town deletions after activation sync automatically. Other edits are never overwritten. To share existing local-only entries, use Review NEW Uploads.</p>
+          <details class="advanced">
+            <summary>Advanced sync tools &amp; recovery</summary>
+            <p class="note">Use these tools only when reviewing older changes, troubleshooting, or restoring an empty database.</p>
+            <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
+            <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button><button data-review-deletes>Review Previous Deletions</button></div>
+            <div data-review></div>
+            <div class="actions"><button data-now>Sync Now (legacy; may overwrite)</button></div>
+            <label class="field">Seed empty database from backup:<input data-file type="file" accept=".json,application/json"></label>
+            <div class="actions"><button data-seed>Upload backup (once)</button></div>
+          </details>
+          <p class="note">New entries and explicit name/town deletions sync automatically. Existing conflicts are protected.</p>
         `;
         shadow.appendChild(panel);
         document.documentElement.appendChild(host);
@@ -16412,6 +16421,8 @@ if (pinBtn) {
         const closePanel = event => {
             event?.preventDefault();
             event?.stopPropagation();
+            const pendingName=panel?.querySelector('[data-device-label]');
+            if (pendingName) set(DEVICE_LABEL_KEY,pendingName.value.trim().slice(0,60)||deviceId);
             listeners.abort();
             host.style.setProperty('display','none','important');
             detachSyncElement(host);
@@ -16441,13 +16452,30 @@ if (pinBtn) {
         panel.querySelector('[data-activity-open]').onclick=()=>void showSharedActivity();
         const labelInput=panel.querySelector('[data-device-label]');
         labelInput.value=deviceLabel();
-        labelInput.addEventListener('change',()=>set(DEVICE_LABEL_KEY,labelInput.value.trim()||deviceId));
+        const labelStatus=panel.querySelector('[data-device-save-status]');
+        let labelSaveTimer=null;
+        const saveDeviceLabel=()=>{
+            if (labelSaveTimer!==null) {clearTimeout(labelSaveTimer);labelSaveTimer=null;}
+            const name=labelInput.value.trim().slice(0,60)||deviceId;
+            set(DEVICE_LABEL_KEY,name);
+            labelStatus.textContent='Saved as: '+name+' (this computer)';
+        };
+        // Save as the user types, not only on change/blur. Closing the panel
+        // or clicking elsewhere must not lose the name.
+        labelInput.addEventListener('input',()=>{
+            labelStatus.textContent='Saving...';
+            if (labelSaveTimer!==null) clearTimeout(labelSaveTimer);
+            labelSaveTimer=setTimeout(saveDeviceLabel,300);
+        });
+        labelInput.addEventListener('blur',saveDeviceLabel);
+        labelInput.addEventListener('change',saveDeviceLabel);
+        labelStatus.textContent='Current name: '+deviceLabel();
         panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected)panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
     // v366: Never run the legacy overwrite-capable sync on a timer.
     set('enabled',false);
-    setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},120000);
+    setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},30000);
     console.info('Toolbar v363 team sync available via Tampermonkey menu (OFF by default).');
 })();
 // ===== END TEAM SYNC BRIDGE =====
