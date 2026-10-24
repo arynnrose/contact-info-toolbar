@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.375
+// @version      9.6.376
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -1508,6 +1508,14 @@ function isUsableTenDigitPhone(digits) {
         return true;
     }
 
+    // v376: Persist explicit X deletions even while automatic sync is OFF.
+    function queueExplicitSyncDeletion(category, key) {
+        if (!key || !['learnedCities','rejectedNames'].includes(category)) return;
+        const storageKey='frt7_team_sync_v339_pending_explicit_deletes_v376';
+        let queue={};try{queue=JSON.parse(GM_getValue(storageKey,'{}')||'{}');}catch(_){}
+        queue[category+'\u0000'+key]={category,item_key:key,recordedAt:Date.now()};
+        GM_setValue(storageKey,JSON.stringify(queue));
+    }
     function forgetRejectedAutoName(key, nameValue = "") {
         const displayName = String(nameValue || "").trim() || String(key || "").trim();
         const normalized = normalizeRejectedName(displayName) || normalizeRejectedName(key);
@@ -1533,6 +1541,7 @@ function isUsableTenDigitPhone(digits) {
         rejectedAutoNamesCache = verify;
         window.__frt7_rejected_last_diag = `${displayName} = DELETED (verified)`;
         try { updateRejectedNameDiagnostic(window.__frt7_rejected_last_diag); } catch (_) {}
+        queueExplicitSyncDeletion('rejectedNames', normalized);
         console.info(`Toolbar rejected names: v25 permanently deleted "${displayName}" and verified single DB.`);
         return true;
     }
@@ -2564,6 +2573,7 @@ function isUsableTenDigitPhone(digits) {
 
         learnedCitiesCache = verify;
         try { renderLearnedCitiesSettings(); } catch (_) {}
+        queueExplicitSyncDeletion('learnedCities', exactKey);
         console.info(`Toolbar trusted cities v59: permanently deleted "${displayCity}" and verified single DB.`);
         return true;
     }
@@ -12184,6 +12194,7 @@ function renderLearnedCitiesSettings() {
                         removalHandled = false;
                         throw new Error(`Direct X write verification failed for ${label.textContent}.`);
                     }
+                    queueExplicitSyncDeletion('learnedCities', exactKey);
 
                     learnedCitiesCache = verify;
                     console.info(`Toolbar trusted cities v60: ${label.textContent} = DELETED (direct X verified).`);
@@ -12475,6 +12486,7 @@ function renderRejectedAutoNamesSettings() {
                     throw new Error(`Direct X write verification failed for ${entry.name}.`);
                 }
 
+                queueExplicitSyncDeletion('rejectedNames', exactKey);
                 rejectedAutoNamesCache = verify;
                 window.__frt7_rejected_last_diag = `${entry.name} = DELETED (direct X verified)`;
                 updateRejectedNameDiagnostic(window.__frt7_rejected_last_diag);
@@ -16105,7 +16117,7 @@ if (pinBtn) {
             // a newly created local key after the first background download.
             for (const id of remote.keys()) seen[id]=true;
             set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
-            set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(local)));
+            if (get(DELETE_SNAPSHOT_KEY,null)===null) set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(local)));
             set(AUTO_NEW_ENABLED_KEY,true);
             set('enabled',false); // legacy sync remains disabled
             say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town deletions sync; new entries and safe downloads continue every 2 minutes.');
@@ -16144,23 +16156,27 @@ if (pinBtn) {
             const previousDeletes=beforeDeletes===null ? null : parse(beforeDeletes);
             const localForDeletes=flatten(readLocal());
             let deletesUploaded=0,deletesDownloaded=0,deleteConflicts=0;
-            if (previousDeletes !== null) {
-                const transitions=[...localForDeletes].filter(([id,row])=>
-                    DELETE_CATEGORIES.has(row.category) && isDeleted(row) &&
-                    previousDeletes[id] && previousDeletes[id].deleted===false);
-                if (transitions.length > MAX_DELETE_WRITES)
-                    throw new Error('SAFETY STOP: '+transitions.length+
-                        ' simultaneous name/town deletions. No deletions uploaded. Automatic sync paused for review.');
-                for (const [id,row] of transitions) {
-                    const existing=remote.get(id), previous=previousDeletes[id];
-                    if (!existing || isDeleted(existing)) {deleteConflicts++;continue;}
-                    if (!sameMeaning(activeMeaning(existing.item_value),activeMeaning(previous.value))) {
-                        deleteConflicts++;continue; // remote was edited since last known active state
-                    }
-                    await publishDeletion(t,existing,row);
-                    deletesUploaded++;
-                    remote=await fetchRemote(t);
+            // Explicit queue survives OFF/ON, restarts, and unsuccessful attempts.
+            const pendingKey='pending_explicit_deletes_v376';
+            const pending=parse(get(pendingKey,'{}'));
+            const pendingRows=Object.entries(pending);
+            if (pendingRows.length > MAX_DELETE_WRITES)
+                throw new Error('SAFETY STOP: '+pendingRows.length+' pending deletions; review before sending more than 10.');
+            for (const [id,entry] of pendingRows) {
+                if (!DELETE_CATEGORIES.has(entry.category)) continue;
+                const localRow=localForDeletes.get(id), existing=remote.get(id);
+                if (!localRow || !isDeleted(localRow)) {deleteConflicts++;continue;}
+                if (!existing) {deleteConflicts++;continue;}
+                if (isDeleted(existing)) {
+                    delete pending[id];set(pendingKey,JSON.stringify(pending));continue;
                 }
+                if (!sameMeaning(activeMeaning(existing.item_value),activeMeaning(localRow.item_value))) {
+                    deleteConflicts++;continue;
+                }
+                await publishDeletion(t,existing,localRow);
+                delete pending[id];set(pendingKey,JSON.stringify(pending));
+                deletesUploaded++;
+                remote=await fetchRemote(t);
             }
             // Download remote tombstones only for identical active records.
             // Never overwrite a locally edited or separately deleted record.
@@ -16199,6 +16215,31 @@ if (pinBtn) {
             set(AUTO_NEW_ENABLED_KEY,false);
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
         } finally {busy=false;autoNewBusy=false;}
+    }
+    // v376: historical deletes require individual user confirmation; never infer silently.
+    async function reviewPriorDeletions() {
+        if (busy || autoNewBusy) return;
+        busy=true;
+        try {
+            const t=await token();await authorized(t);
+            const remote=await fetchRemote(t),local=flatten(readLocal());
+            const choices=[...local].filter(([id,row])=>
+                DELETE_CATEGORIES.has(row.category) && isDeleted(row) &&
+                remote.has(id) && !isDeleted(remote.get(id)) &&
+                sameMeaning(activeMeaning(row.item_value),activeMeaning(remote.get(id).item_value)));
+            if (!choices.length) {say('No matching previously deleted names or towns found for review.');return;}
+            let approved=0;
+            for (const [id,row] of choices.slice(0,10)) {
+                if (!window.confirm('Sync this previously deleted '+(row.category==='learnedCities'?'town':'name')+
+                    ' to the other computer?\\n'+(row.item_value?.city||row.item_value?.name||row.item_key)+
+                    '\\n\\nOK = delete from shared database; Cancel = skip.')) continue;
+                const latest=await fetchRemote(t),existing=latest.get(id);
+                if (!existing || isDeleted(existing) || !sameMeaning(activeMeaning(existing.item_value),activeMeaning(row.item_value))) continue;
+                await publishDeletion(t,existing,row);approved++;
+            }
+            say('Historical deletion review: '+approved+' confirmed deletions published. Other entries unchanged.');
+        } catch(e){say('Deletion review stopped: '+e.message);}
+        finally{busy=false;}
     }
     // v371: isolated, top-frame-only dialog; no host-page CSS or nested iframe panels.
     const SYNC_HOST_ID = 'contact-toolbar-sync-v371-host';
@@ -16265,7 +16306,7 @@ if (pinBtn) {
           <label class="field">Seed empty database from backup:<input data-file type="file" accept=".json,application/json"></label>
           <div class="actions"><button data-seed>Upload backup (once)</button><button data-now>Sync Now</button></div>
           <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
-          <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button></div>
+          <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button><button data-review-deletes>Review Previous Deletions</button></div>
           <div data-review></div>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (new entries + name/town deletions, every 2 minutes)</b></label>
           <p class="note">Existing backlog and conflicts remain protected. Only deliberate name/town deletions after activation sync automatically. Other edits are never overwritten. To share existing local-only entries, use Review NEW Uploads.</p>
@@ -16303,6 +16344,7 @@ if (pinBtn) {
         panel.querySelector('[data-download]').onclick=downloadMissingOnly;
         panel.querySelector('[data-compare]').onclick=compareAndDownload;
         panel.querySelector('[data-review-open]').onclick=openUploadReview;
+        panel.querySelector('[data-review-deletes]').onclick=()=>void reviewPriorDeletions();
         panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected)panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
