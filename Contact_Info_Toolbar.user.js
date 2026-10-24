@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.382
+// @version      9.6.383
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16102,9 +16102,8 @@ if (pinBtn) {
         if (!verified?.deleted || !verified.item_value?.deleted)
             throw new Error('Deletion readback failed or changed concurrently for '+remoteRow.item_key);
     }
-    // v379: Shared audit records are stored as separate rows in the existing
-    // Supabase table. This does not change any learned-data row or sync rules.
-    const ACTIVITY_CATEGORY='__sync_activity_v379';
+    // v383: Dedicated Supabase audit table. No learned-data tables are modified.
+    const ACTIVITY_TABLE='/rest/v1/toolbar_sync_activity';
     const DEVICE_KEY='shared_activity_device_v379';
     const DEVICE_LABEL_KEY='shared_activity_label_v379';
     let deviceId=get(DEVICE_KEY,'');
@@ -16114,14 +16113,6 @@ if (pinBtn) {
         set(DEVICE_KEY,deviceId);
     }
     const deviceLabel=()=>String(get(DEVICE_LABEL_KEY,deviceId)||deviceId).slice(0,60);
-    function activityEntry(row) {
-        const v=row?.item_value||{};
-        return {time:v.time||row.updated_at||'',device:v.device||'Unknown',
-            action:v.action||'Unknown',category:v.category||'',entry:v.entry||'',
-            detail:v.detail||'',result:v.result||'Success'};
-    }
-    // v382: Persist audit events locally until independently verified in Supabase.
-    // Supabase has previously returned HTTP 201 without actually storing a row.
     const ACTIVITY_PENDING_KEY='shared_activity_pending_v382';
     const ACTIVITY_ERROR_KEY='shared_activity_error_v382';
     let activityFlushing=false;
@@ -16129,29 +16120,42 @@ if (pinBtn) {
         const raw=parse(get(ACTIVITY_PENDING_KEY,'{}'));
         return raw && typeof raw==='object' && !Array.isArray(raw) ? raw : {};
     }
+    function activityUUID() {
+        if (typeof crypto!=='undefined' && crypto.randomUUID) return crypto.randomUUID();
+        // UUID v4 fallback for Firefox userscript environments without crypto.randomUUID.
+        const bytes=new Uint8Array(16); crypto.getRandomValues(bytes);
+        bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+        const h=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+        return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
+    }
     async function flushActivity(t) {
         if (activityFlushing) return;
         activityFlushing=true;
         try {
             const pending=pendingActivity();
-            for (const [key,item_value] of Object.entries(pending).slice(0,20)) {
-                const row={category:ACTIVITY_CATEGORY,item_key:key,item_value,
-                    deleted:false,updated_by:identity()};
-                const path='/rest/v1/toolbar_shared_items?category=eq.'+
-                    encodeURIComponent(ACTIVITY_CATEGORY)+'&item_key=eq.'+
-                    encodeURIComponent(key)+'&select=item_key,item_value';
+            for (const [key,original] of Object.entries(pending).slice(0,20)) {
+                // Upgrade queued v382 records in place so failed events are not lost.
+                const event={...original};
+                if (!event._audit_id) {
+                    event._audit_id=activityUUID();
+                    const latest=pendingActivity();
+                    if (latest[key]) {latest[key]=event;set(ACTIVITY_PENDING_KEY,JSON.stringify(latest));}
+                }
+                const path=ACTIVITY_TABLE+'?id=eq.'+encodeURIComponent(event._audit_id)+'&select=id';
                 let found=await request('GET',path,null,t);
                 if (!Array.isArray(found.data)) throw new Error('Audit readback returned unexpected data');
                 if (!found.data.length) {
-                    await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',
-                        row,t,{'Prefer':'return=representation'});
+                    const row={id:event._audit_id,created_at:event.time||new Date().toISOString(),
+                        device_id:event.deviceId||deviceId,device_name:event.device||deviceLabel(),
+                        action:event.action||'Unknown',category:event.category||'Unknown',
+                        entry_key:event.entry||'',details:event.detail||null};
+                    await request('POST',ACTIVITY_TABLE,row,t,{'Prefer':'return=representation'});
                     found=await request('GET',path,null,t);
                 }
-                if (!Array.isArray(found.data) || !found.data.some(r=>r.item_key===key))
-                    throw new Error('Audit record was not saved by Supabase (HTTP success is not sufficient)');
-                // Remove only this verified record, preserving any events queued meanwhile.
+                if (!Array.isArray(found.data) || !found.data.some(r=>r.id===event._audit_id))
+                    throw new Error('Activity event was not visible in Supabase after upload');
                 const latest=pendingActivity();
-                if (Object.prototype.hasOwnProperty.call(latest,key)) {
+                if (latest[key]?._audit_id===event._audit_id) {
                     delete latest[key];set(ACTIVITY_PENDING_KEY,JSON.stringify(latest));
                 }
             }
@@ -16164,12 +16168,12 @@ if (pinBtn) {
     }
     async function recordActivity(t,action,row,detail='') {
         if (!row || !row.category || !row.item_key) return;
-        const key=Date.now().toString(36)+'-'+deviceId+'-'+Math.random().toString(36).slice(2,9);
-        const item_value={time:new Date().toISOString(),device:deviceLabel(),
+        const id=activityUUID();
+        const item_value={_audit_id:id,time:new Date().toISOString(),device:deviceLabel(),
             deviceId,action,category:row.category,entry:row.item_key,
             detail:String(detail).slice(0,160),result:'Success'};
         const pending=pendingActivity();
-        pending[key]=item_value;
+        pending[id]=item_value;
         set(ACTIVITY_PENDING_KEY,JSON.stringify(pending));
         await flushActivity(t);
     }
@@ -16181,9 +16185,9 @@ if (pinBtn) {
         try {
             const t=await token();await authorized(t);
             await flushActivity(t);
-            const path='/rest/v1/toolbar_shared_items?category=eq.'+
-                encodeURIComponent(ACTIVITY_CATEGORY)+
-                '&select=item_value,updated_at&order=updated_at.desc&limit=100';
+            const path=ACTIVITY_TABLE+
+                '?select=created_at,device_name,action,category,entry_key,details'+
+                '&order=created_at.desc&limit=100';
             const response=await request('GET',path,null,t);
             if (!Array.isArray(response.data)) throw new Error('Unexpected log response');
             container.replaceChildren();
@@ -16193,24 +16197,22 @@ if (pinBtn) {
             diag.style.color=pendingCount||lastError?'#ffd58a':'#a9e6bd';
             diag.textContent=pendingCount
                 ? pendingCount+' log event(s) awaiting verified upload.'+(lastError?' Last error: '+lastError:'')
-                : 'All locally recorded log events uploaded and verified.'+
-                    (lastError?' Previous error: '+lastError:'');
+                : 'All locally recorded log events uploaded and verified.';
             container.appendChild(diag);
             const heading=document.createElement('div');
-            heading.textContent='Shared activity — newest 100 events (UTC timestamps)';
+            heading.textContent='Shared activity — newest 100 events (local time)';
             heading.style.fontWeight='bold';container.appendChild(heading);
             if (!response.data.length) {
                 const empty=document.createElement('p');
-                empty.textContent='No shared activity recorded yet. Only events after v379 are logged.';
+                empty.textContent='No shared activity recorded yet. New events and queued v382 events appear here.';
                 container.appendChild(empty);
             }
-            for (const row of response.data) {
-                const e=activityEntry(row),item=document.createElement('div');
-                item.className='activity-row';
-                const time=Date.parse(e.time);
-                const stamp=Number.isFinite(time)?new Date(time).toLocaleString():e.time;
-                item.textContent=stamp+' | '+e.device+' | '+e.action+
-                    ' | '+e.category+': '+e.entry+(e.detail?' | '+e.detail:'');
+            for (const e of response.data) {
+                const item=document.createElement('div');item.className='activity-row';
+                const time=Date.parse(e.created_at);
+                const stamp=Number.isFinite(time)?new Date(time).toLocaleString():e.created_at;
+                item.textContent=stamp+' | '+(e.device_name||'Unknown')+' | '+(e.action||'Unknown')+
+                    ' | '+(e.category||'')+': '+(e.entry_key||'')+(e.details?' | '+e.details:'');
                 container.appendChild(item);
             }
         } catch(error) {container.textContent='Could not load shared log: '+error.message;}
