@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.373
+// @version      9.6.374
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16131,12 +16131,19 @@ if (pinBtn) {
     }
     // v371: isolated, top-frame-only dialog; no host-page CSS or nested iframe panels.
     const SYNC_HOST_ID = 'contact-toolbar-sync-v371-host';
+    // v374: The page patches Element.remove(); bypass that override with the
+    // native Node removal method, and never attempt to remove a detached node.
+    function detachSyncElement(el) {
+        if (!el || !el.parentNode) return;
+        try { Node.prototype.removeChild.call(el.parentNode, el); }
+        catch (error) { console.warn('[Toolbar Team Sync] Could not detach old panel:', error); }
+    }
     function removeSyncPanels() {
         // Remove all previously installed Team Sync dialogs, including v369/v370.
-        document.querySelectorAll('#'+SYNC_HOST_ID+',#contact-toolbar-team-sync-panel,[data-contact-toolbar-team-sync]').forEach(el=>el.remove());
+        document.querySelectorAll('#'+SYNC_HOST_ID+',#contact-toolbar-team-sync-panel,[data-contact-toolbar-team-sync]').forEach(detachSyncElement);
         for (const el of document.querySelectorAll('body > div, html > div')) {
             if (el.style.position !== 'fixed') continue;
-            if (el.textContent?.includes('Contact Toolbar — Team Sync') && el.querySelector('[data-close]')) el.remove();
+            if (el.textContent?.includes('Contact Toolbar — Team Sync') && el.querySelector('[data-close]')) detachSyncElement(el);
         }
         panel = null;
     }
@@ -16202,7 +16209,7 @@ if (pinBtn) {
             event?.stopPropagation();
             listeners.abort();
             host.style.setProperty('display','none','important');
-            host.remove();
+            detachSyncElement(host);
             if (panel && !panel.isConnected) panel = null;
         };
         const coordinateClose = event => {
