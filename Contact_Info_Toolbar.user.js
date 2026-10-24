@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.367
+// @version      9.6.368
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16023,7 +16023,7 @@ if (pinBtn) {
         if (!confirm('CREATE '+chosen.length+' selected NEW entries in Supabase? No existing records will be overwritten. Auto Sync stays OFF.')) return;
         busy=true;
         set('enabled',false);
-        if (panel?.isConnected) panel.querySelector('[data-auto]').checked=false;
+        
         let uploaded=0;
         try {
             const t=await token();await authorized(t);
@@ -16132,14 +16132,25 @@ if (pinBtn) {
         if (panel?.isConnected) { panel.remove(); panel=null; return; }
         panel=document.createElement('div');
         panel.style.cssText='position:fixed;z-index:2147483647;right:16px;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;width:355px;max-width:95vw;background:#172332;color:white;border:2px solid #6da9e5;border-radius:9px;padding:14px;font:13px Arial;box-shadow:0 4px 20px #0008';
-        panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button data-close style="float:right">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><button data-download>Download Missing Only (safe)</button> <button data-compare>Export Comparison</button></p><p><button data-review-open>Review NEW Uploads (max 10 per batch)</button></p><div data-review></div><p><label><input data-auto-new type="checkbox"> Safe automatic sync (NEW entries only, every 2 minutes)</label></p><p style="font-size:11px">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p><p><label><input data-auto type="checkbox" disabled> Legacy full sync (disabled for safety)</label></p><p style="font-size:11px">Start with backup export on every computer. Only upload the first backup to an EMPTY database. Other computers use Sync Now. Changes are stored locally and uploaded at the next sync. Reload after receiving changes.</p>';
+        panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button type="button" data-close aria-label="Close Team Sync" style="float:right;position:relative;z-index:2;cursor:pointer;padding:3px 9px;background:#30475e;color:white;border:1px solid #8baac6;border-radius:4px">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><button data-download>Download Missing Only (safe)</button> <button data-compare>Export Comparison</button></p><p><button data-review-open>Review NEW Uploads (max 10 per batch)</button></p><div data-review></div><p><label><input data-auto-new type="checkbox"> Safe automatic sync (NEW entries only, every 2 minutes)</label></p><p style="font-size:11px">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p>';
         document.body.appendChild(panel);
         panel.querySelector('[data-sync-status]').textContent=status;
-        panel.querySelector('[data-auto]').checked=false;
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
-        panel.querySelector('[data-close]').onclick=()=>{panel.remove();panel=null;};
+        // v368: capture-phase close prevents interference from host-page click handlers.
+        const closeSyncPanel = (event) => {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            if (panel?.isConnected) panel.remove();
+            panel = null;
+        };
+        const closeButton = panel.querySelector('[data-close]');
+        closeButton.addEventListener('pointerdown', e => e.stopPropagation(), true);
+        closeButton.addEventListener('mousedown', e => e.stopPropagation(), true);
+        closeButton.addEventListener('click', closeSyncPanel, true);
+        panel.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeSyncPanel(e);
+        }, true);
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
-        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto]').checked=false;panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
+        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
         panel.querySelector('[data-now]').onclick=syncNow;
         panel.querySelector('[data-download]').onclick=downloadMissingOnly;
