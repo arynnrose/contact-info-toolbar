@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.374
+// @version      9.6.375
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16053,12 +16053,43 @@ if (pinBtn) {
         } catch(e) {say('Reviewed upload stopped after '+uploaded+' verified entries: '+e.message+' Auto Sync OFF.');}
         finally {busy=false;}
     }
-    // v366: Opt-in, conservative automatic CREATE-ONLY sync. It never invokes
-    // legacy syncNow(), never overwrites existing keys, and never propagates deletes.
+    // v375: Opt-in safe new-entry sync plus explicit name/town tombstone transitions. It never invokes
+    // legacy syncNow(); deletion PATCHes are conditional and limited to 10 per cycle.
     // Initial snapshot deliberately excludes the pre-existing migration backlog.
     const AUTO_NEW_SEEN_KEY = 'auto_new_seen_v366';
     const AUTO_NEW_ENABLED_KEY = 'auto_new_enabled_v366';
     const AUTO_NEW_LIMIT = 10;
+    // v375: explicit deletion transitions only; never infer deletion from a missing key.
+    // First run establishes a baseline, so historical deletions cannot be replayed.
+    const DELETE_SNAPSHOT_KEY = 'safe_delete_snapshot_v375';
+    const DELETE_CATEGORIES = new Set(['rejectedNames','learnedCities']);
+    const MAX_DELETE_WRITES = 10;
+    const isDeleted = row => !!(row?.deleted || row?.item_value?.deleted);
+    const snapshotLocal = local => {
+        const out = {};
+        for (const [id,row] of local) if (DELETE_CATEGORIES.has(row.category))
+            out[id] = {deleted:isDeleted(row),value:row.item_value};
+        return out;
+    };
+    const activeMeaning = value => {
+        if (!value || typeof value !== 'object') return value;
+        const copy={...value}; delete copy.deleted; delete copy.deletedAt;
+        return copy;
+    };
+    // Optimistic concurrency: update ONLY the row read with the same updated_at.
+    // A concurrent change is a conflict, not permission to overwrite.
+    async function publishDeletion(t, remoteRow, localRow) {
+        const tomb={...remoteRow.item_value,deleted:true,deletedAt:localRow.item_value.deletedAt||Date.now()};
+        const path='/rest/v1/toolbar_shared_items?category=eq.'+
+            encodeURIComponent(remoteRow.category)+'&item_key=eq.'+
+            encodeURIComponent(remoteRow.item_key)+'&deleted=eq.false&updated_at=eq.'+
+            encodeURIComponent(remoteRow.updated_at)+'&select=category,item_key,deleted';
+        await request('PATCH',path,{deleted:true,item_value:tomb,updated_by:identity()},t,
+            {'Prefer':'return=representation'});
+        const after=await fetchRemote(t), verified=after.get(remoteRow.category+'\u0000'+remoteRow.item_key);
+        if (!verified?.deleted || !verified.item_value?.deleted)
+            throw new Error('Deletion readback failed or changed concurrently for '+remoteRow.item_key);
+    }
     let autoNewBusy = false;
     async function enableAutoNew() {
         if (busy || autoNewBusy) return;
@@ -16074,9 +16105,10 @@ if (pinBtn) {
             // a newly created local key after the first background download.
             for (const id of remote.keys()) seen[id]=true;
             set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
+            set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(local)));
             set(AUTO_NEW_ENABLED_KEY,true);
             set('enabled',false); // legacy sync remains disabled
-            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog, conflicts, and deletions will NOT upload. New entries only; download missing entries every 2 minutes.');
+            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town deletions sync; new entries and safe downloads continue every 2 minutes.');
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
         finally {busy=false;}
     }
@@ -16106,6 +16138,43 @@ if (pinBtn) {
                 seen[id]=true; uploaded++;
                 set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
             }
+            // v375: propagate only observed active -> deleted transitions.
+            // A missing local key, old tombstone, or preexisting backlog is NEVER a delete.
+            const beforeDeletes=get(DELETE_SNAPSHOT_KEY,null);
+            const previousDeletes=beforeDeletes===null ? null : parse(beforeDeletes);
+            const localForDeletes=flatten(readLocal());
+            let deletesUploaded=0,deletesDownloaded=0,deleteConflicts=0;
+            if (previousDeletes !== null) {
+                const transitions=[...localForDeletes].filter(([id,row])=>
+                    DELETE_CATEGORIES.has(row.category) && isDeleted(row) &&
+                    previousDeletes[id] && previousDeletes[id].deleted===false);
+                if (transitions.length > MAX_DELETE_WRITES)
+                    throw new Error('SAFETY STOP: '+transitions.length+
+                        ' simultaneous name/town deletions. No deletions uploaded. Automatic sync paused for review.');
+                for (const [id,row] of transitions) {
+                    const existing=remote.get(id), previous=previousDeletes[id];
+                    if (!existing || isDeleted(existing)) {deleteConflicts++;continue;}
+                    if (!sameMeaning(activeMeaning(existing.item_value),activeMeaning(previous.value))) {
+                        deleteConflicts++;continue; // remote was edited since last known active state
+                    }
+                    await publishDeletion(t,existing,row);
+                    deletesUploaded++;
+                    remote=await fetchRemote(t);
+                }
+            }
+            // Download remote tombstones only for identical active records.
+            // Never overwrite a locally edited or separately deleted record.
+            for (const [id,row] of remote) {
+                if (!DELETE_CATEGORIES.has(row.category) || !isDeleted(row)) continue;
+                const here=localForDeletes.get(id);
+                if (!here || isDeleted(here)) continue;
+                if (!sameMeaning(activeMeaning(here.item_value),activeMeaning(row.item_value))) {
+                    deleteConflicts++;continue;
+                }
+                data[row.category][row.item_key]={...here.item_value,deleted:true,
+                    deletedAt:row.item_value?.deletedAt||Date.now()};
+                deletesDownloaded++;
+            }
             // Protect existing local values; import only missing, nondeleted keys.
             let downloaded=0,conflicts=0;
             for (const [id,row] of remote) {
@@ -16118,12 +16187,14 @@ if (pinBtn) {
                 data[row.category][row.item_key]=row.item_value;
                 seen[id]=true; downloaded++;
             }
-            if (downloaded) writeLocal(data);
+            if (downloaded || deletesDownloaded) writeLocal(data);
             // Mark only entries that already existed remotely as seen; unresolved
             // local-only entries remain eligible next time unless flagged.
             for (const id of remote.keys()) seen[id]=true;
             set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
-            say('Safe auto sync: '+uploaded+' new uploaded, '+downloaded+' missing downloaded, '+conflicts+' conflicts protected. No overwrites or deletions.'+(downloaded?' Reload page to refresh caches.':''));
+            // Snapshot only after all remote writes and local imports have succeeded.
+            set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(flatten(data))));
+            say('Safe auto sync: '+uploaded+' new uploaded, '+downloaded+' missing downloaded, '+conflicts+' conflicts protected; '+deletesUploaded+' deletions uploaded, '+deletesDownloaded+' deletions downloaded, '+deleteConflicts+' deletion conflicts protected. No other overwrites.'+((downloaded||deletesDownloaded)?' Reload page to refresh caches.':''));
         } catch(e) {
             set(AUTO_NEW_ENABLED_KEY,false);
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
@@ -16196,8 +16267,8 @@ if (pinBtn) {
           <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
           <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button></div>
           <div data-review></div>
-          <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (NEW entries only, every 2 minutes)</b></label>
-          <p class="note">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p>
+          <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (new entries + name/town deletions, every 2 minutes)</b></label>
+          <p class="note">Existing backlog and conflicts remain protected. Only deliberate name/town deletions after activation sync automatically. Other edits are never overwritten. To share existing local-only entries, use Review NEW Uploads.</p>
         `;
         shadow.appendChild(panel);
         document.documentElement.appendChild(host);
