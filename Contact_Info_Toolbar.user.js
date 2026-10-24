@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.381
+// @version      9.6.382
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16120,17 +16120,58 @@ if (pinBtn) {
             action:v.action||'Unknown',category:v.category||'',entry:v.entry||'',
             detail:v.detail||'',result:v.result||'Success'};
     }
-    async function recordActivity(t,action,row,detail='') {
-        // Logging must never block or roll back a successful sync operation.
+    // v382: Persist audit events locally until independently verified in Supabase.
+    // Supabase has previously returned HTTP 201 without actually storing a row.
+    const ACTIVITY_PENDING_KEY='shared_activity_pending_v382';
+    const ACTIVITY_ERROR_KEY='shared_activity_error_v382';
+    let activityFlushing=false;
+    function pendingActivity() {
+        const raw=parse(get(ACTIVITY_PENDING_KEY,'{}'));
+        return raw && typeof raw==='object' && !Array.isArray(raw) ? raw : {};
+    }
+    async function flushActivity(t) {
+        if (activityFlushing) return;
+        activityFlushing=true;
         try {
-            const key=Date.now().toString(36)+'-'+deviceId+'-'+Math.random().toString(36).slice(2,9);
-            const item_value={time:new Date().toISOString(),device:deviceLabel(),
-                deviceId,action,category:row.category,entry:row.item_key,
-                detail:String(detail).slice(0,160),result:'Success'};
-            await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',
-                {category:ACTIVITY_CATEGORY,item_key:key,item_value,deleted:false,updated_by:identity()},
-                t,{'Prefer':'return=minimal'});
-        } catch(error) { console.warn('[Team Sync activity] Could not publish audit event:',error.message); }
+            const pending=pendingActivity();
+            for (const [key,item_value] of Object.entries(pending).slice(0,20)) {
+                const row={category:ACTIVITY_CATEGORY,item_key:key,item_value,
+                    deleted:false,updated_by:identity()};
+                const path='/rest/v1/toolbar_shared_items?category=eq.'+
+                    encodeURIComponent(ACTIVITY_CATEGORY)+'&item_key=eq.'+
+                    encodeURIComponent(key)+'&select=item_key,item_value';
+                let found=await request('GET',path,null,t);
+                if (!Array.isArray(found.data)) throw new Error('Audit readback returned unexpected data');
+                if (!found.data.length) {
+                    await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',
+                        row,t,{'Prefer':'return=representation'});
+                    found=await request('GET',path,null,t);
+                }
+                if (!Array.isArray(found.data) || !found.data.some(r=>r.item_key===key))
+                    throw new Error('Audit record was not saved by Supabase (HTTP success is not sufficient)');
+                // Remove only this verified record, preserving any events queued meanwhile.
+                const latest=pendingActivity();
+                if (Object.prototype.hasOwnProperty.call(latest,key)) {
+                    delete latest[key];set(ACTIVITY_PENDING_KEY,JSON.stringify(latest));
+                }
+            }
+            set(ACTIVITY_ERROR_KEY,'');
+        } catch(error) {
+            const message=String(error.message||error);
+            set(ACTIVITY_ERROR_KEY,message);
+            console.warn('[Team Sync activity] Audit pending; will retry:',message);
+        } finally {activityFlushing=false;}
+    }
+    async function recordActivity(t,action,row,detail='') {
+        if (!row || !row.category || !row.item_key) return;
+        const key=Date.now().toString(36)+'-'+deviceId+'-'+Math.random().toString(36).slice(2,9);
+        const item_value={time:new Date().toISOString(),device:deviceLabel(),
+            deviceId,action,category:row.category,entry:row.item_key,
+            detail:String(detail).slice(0,160),result:'Success'};
+        const pending=pendingActivity();
+        pending[key]=item_value;
+        set(ACTIVITY_PENDING_KEY,JSON.stringify(pending));
+        await flushActivity(t);
     }
     async function showSharedActivity() {
         const container=panel?.querySelector('[data-activity]');
@@ -16139,12 +16180,22 @@ if (pinBtn) {
         container.textContent='Loading shared activity...';
         try {
             const t=await token();await authorized(t);
+            await flushActivity(t);
             const path='/rest/v1/toolbar_shared_items?category=eq.'+
                 encodeURIComponent(ACTIVITY_CATEGORY)+
                 '&select=item_value,updated_at&order=updated_at.desc&limit=100';
             const response=await request('GET',path,null,t);
             if (!Array.isArray(response.data)) throw new Error('Unexpected log response');
             container.replaceChildren();
+            const pendingCount=Object.keys(pendingActivity()).length;
+            const lastError=get(ACTIVITY_ERROR_KEY,'');
+            const diag=document.createElement('p');
+            diag.style.color=pendingCount||lastError?'#ffd58a':'#a9e6bd';
+            diag.textContent=pendingCount
+                ? pendingCount+' log event(s) awaiting verified upload.'+(lastError?' Last error: '+lastError:'')
+                : 'All locally recorded log events uploaded and verified.'+
+                    (lastError?' Previous error: '+lastError:'');
+            container.appendChild(diag);
             const heading=document.createElement('div');
             heading.textContent='Shared activity — newest 100 events (UTC timestamps)';
             heading.style.fontWeight='bold';container.appendChild(heading);
@@ -16192,6 +16243,7 @@ if (pinBtn) {
         try {
             const t=await token(); await authorized(t);
             let remote=await fetchRemote(t);
+            await flushActivity(t);
             if (!remote.size) throw new Error('Remote database is empty');
             const data=readLocal(), local=flatten(data);
             const seen=parse(get(AUTO_NEW_SEEN_KEY,'{}'));
@@ -16239,7 +16291,7 @@ if (pinBtn) {
                 await publishDeletion(t,existing,localRow);
                 delete pending[id];set(pendingKey,JSON.stringify(pending));
                 deletesUploaded++;
-                await recordActivity(t,'Deleted (uploaded)',row);
+                await recordActivity(t,'Deleted (uploaded)',localRow);
                 remote=await fetchRemote(t);
             }
             // Download remote tombstones only for identical active records.
@@ -16392,9 +16444,6 @@ if (pinBtn) {
         panel.innerHTML = `
           <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
           <div class="status" data-sync-status></div>
-          <label class="field">Email<input data-email type="email" autocomplete="username"></label>
-          <label class="field">Password<input data-pass type="password" autocomplete="current-password"></label>
-          <div class="actions"><button data-login>Sign in</button><button data-logout>Sign out</button></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (every 30 seconds)</b></label>
           <div class="actions"><button data-activity-open>View Shared Activity Log</button></div>
@@ -16403,7 +16452,12 @@ if (pinBtn) {
           <div class="activity" data-activity hidden></div>
           <details class="advanced">
             <summary>Advanced sync tools &amp; recovery</summary>
-            <p class="note">Use these tools only when reviewing older changes, troubleshooting, or restoring an empty database.</p>
+            <p class="note">You normally remain signed in. Use these fields only if your session expires or you want to sign out.</p>
+            <label class="field">Email<input data-email type="email" autocomplete="username"></label>
+            <label class="field">Password<input data-pass type="password" autocomplete="current-password"></label>
+            <div class="actions"><button data-login>Sign in</button><button data-logout>Sign out</button></div>
+            <hr>
+            <p class="note">Use the remaining tools only when reviewing older changes, troubleshooting, or restoring an empty database.</p>
             <div class="actions"><button data-download>Download Missing Only (safe)</button><button data-compare>Export Comparison</button></div>
             <div class="actions"><button data-review-open>Review NEW Uploads (max 10 per batch)</button><button data-review-deletes>Review Previous Deletions</button></div>
             <div data-review></div>
