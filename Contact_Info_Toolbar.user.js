@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.386
+// @version      9.6.387
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16294,6 +16294,35 @@ if (pinBtn) {
         set(CONFLICT_REPORT_KEY,JSON.stringify(report));
         renderConflictReport();
     }
+    async function restoreSharedAreaCode(area) {
+        if (busy || autoNewBusy) {say('Wait for the current sync to finish, then retry.');return;}
+        const localRow=flatten(readLocal()).get('customAreaCodes'+'\u0000'+area);
+        if (!localRow || isDeleted(localRow)) {say('The area code must be active locally before restoring.');return;}
+        const city=String(localRow.item_value?.city||'').trim();
+        const state=String(localRow.item_value?.state||'').trim();
+        if (!city || !/^[A-Z]{2}$/.test(state)) {say('Local area-code entry is incomplete; restoration canceled.');return;}
+        if (!window.confirm('Restore area code '+area+' → '+city+', '+state+' to the shared database?\n\nThis reverses its earlier shared deletion. It will be available to the other computer on its next sync.')) return;
+        busy=true;
+        try {
+            const t=await token();await authorized(t);
+            const id='customAreaCodes'+'\u0000'+area;
+            const before=(await fetchRemote(t)).get(id);
+            if (!before || !isDeleted(before)) throw new Error('Shared entry is no longer deleted. Nothing restored.');
+            const path='/rest/v1/toolbar_shared_items?category=eq.customAreaCodes&item_key=eq.'+
+                encodeURIComponent(area)+'&deleted=eq.true&updated_at=eq.'+
+                encodeURIComponent(before.updated_at)+'&select=category,item_key,deleted';
+            await request('PATCH',path,{item_value:localRow.item_value,deleted:false,updated_by:identity()},t,{'Prefer':'return=representation'});
+            const verified=(await fetchRemote(t)).get(id);
+            if (!verified || isDeleted(verified) || !sameMeaning(verified.item_value,localRow.item_value))
+                throw new Error('Restoration could not be verified. No further changes attempted.');
+            await recordActivity(t,'Restored (approved manually)',localRow);
+            const pending=parse(get('pending_explicit_deletes_v376','{}'));
+            if (pending[id]) {delete pending[id];set('pending_explicit_deletes_v376',JSON.stringify(pending));}
+            say('Verified shared restoration of '+area+' → '+city+', '+state+'.');
+            void autoNewTick();
+        } catch(error) {say('Area-code restoration stopped: '+error.message);}
+        finally {busy=false;}
+    }
     function renderConflictReport() {
         if (!panel?.isConnected) return;
         const target=panel.querySelector('[data-conflict-report]');
@@ -16323,6 +16352,14 @@ if (pinBtn) {
             const explanation=document.createElement('div');
             explanation.textContent=entry.reason;
             line.append(title,explanation);
+            if (entry.category==='customAreaCodes' &&
+                entry.reason.includes('Shared entry is DELETED')) {
+                const button=document.createElement('button');
+                button.type='button';button.textContent='Restore this area code to shared database';
+                button.style.marginTop='7px';
+                button.addEventListener('click',()=>void restoreSharedAreaCode(entry.key));
+                line.appendChild(button);
+            }
             target.appendChild(line);
         }
         if (report.truncated) {
@@ -16413,7 +16450,14 @@ if (pinBtn) {
             for (const [id,row] of remote) {
                 if (local.has(id)) {
                     const here=local.get(id);
-                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) conflicts++;
+                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) {
+                        conflicts++;
+                        const localDeleted=isDeleted(here), remoteDeleted=isDeleted(row);
+                        const reason=localDeleted!==remoteDeleted
+                            ? (remoteDeleted ? 'Shared entry is DELETED, but this computer has an active entry. Re-adding requires explicit restoration.' : 'Local entry is DELETED but shared entry is active; protected.')
+                            : 'Different saved values on both computers; local version preserved.';
+                        noteConflict(id,row,reason);
+                    }
                     continue;
                 }
                 if (row.deleted || row.item_value?.deleted || !Object.prototype.hasOwnProperty.call(CATEGORIES,row.category)) continue;
