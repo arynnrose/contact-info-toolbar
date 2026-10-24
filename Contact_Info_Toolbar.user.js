@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.369
+// @version      9.6.370
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16128,24 +16128,38 @@ if (pinBtn) {
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
         } finally {busy=false;autoNewBusy=false;}
     }
-    // v369: A document-level singleton, including stale panels left by prior versions.
-    // This avoids two independent closures each retaining a different Team Sync panel.
+    // v370: One Team Sync panel per document. Detect older unmarked panels too.
     const SYNC_PANEL_ID = 'contact-toolbar-team-sync-panel';
-    function removeSyncPanels() {
-        document.querySelectorAll('[data-contact-toolbar-team-sync], #contact-toolbar-team-sync-panel').forEach(el => el.remove());
-        // Legacy panels had no ID. Match only their exact, distinctive heading.
-        document.querySelectorAll('body > div').forEach(el => {
-            if (el.id === SYNC_PANEL_ID) { el.remove(); return; }
-            const first = el.firstElementChild;
-            if (first && first.textContent?.startsWith('Contact Toolbar — Team Sync') && first.querySelector('[data-close]')) el.remove();
+    function allSyncPanels() {
+        return Array.from(document.querySelectorAll('body div')).filter(el => {
+            if (el.id === SYNC_PANEL_ID || el.hasAttribute('data-contact-toolbar-team-sync')) return true;
+            // Only top-level floating dialog roots, not nested content.
+            const heading = el.firstElementChild;
+            if (!heading || heading.tagName !== 'DIV') return false;
+            const label = (heading.firstChild?.textContent || '').trim();
+            return label === 'Contact Toolbar — Team Sync' &&
+                !!heading.querySelector('button[data-close]') &&
+                (el.style.position === 'fixed' || el.style.position === 'absolute');
         });
+    }
+    function removeSyncPanels() {
+        for (const el of allSyncPanels()) el.remove();
         panel = null;
     }
-    function openPanel() {
-        const alreadyOpen = !!document.querySelector('[data-contact-toolbar-team-sync]') ||
-            Array.from(document.querySelectorAll('body > div')).some(el => el.firstElementChild?.textContent?.startsWith('Contact Toolbar — Team Sync') && el.firstElementChild.querySelector('[data-close]'));
+    // Capture X clicks before host-page handlers, including buttons belonging to
+    // older dialog instances. Close ALL matching dialogs, not just the newest one.
+    document.addEventListener('click', event => {
+        const button = event.target?.closest?.('button[data-close]');
+        if (!button) return;
+        const root = button.closest('#' + SYNC_PANEL_ID + ',[data-contact-toolbar-team-sync]') ||
+            allSyncPanels().find(el => el.contains(button));
+        if (!root) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
         removeSyncPanels();
-        if (alreadyOpen) return;
+    }, true);
+    function openPanel() {
+        removeSyncPanels();
         panel=document.createElement('div');
         panel.id = SYNC_PANEL_ID;
         panel.dataset.contactToolbarTeamSync = 'true';
@@ -16154,22 +16168,15 @@ if (pinBtn) {
         document.body.appendChild(panel);
         panel.querySelector('[data-sync-status]').textContent=status;
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
-        // v368: capture-phase close prevents interference from host-page click handlers.
-        const closeSyncPanel = (event) => {
-            if (event) { event.preventDefault(); event.stopPropagation(); }
+        // Direct fallback if a browser extension intercepts document clicks.
+        panel.querySelector('[data-close]').addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
             removeSyncPanels();
-        };
-        const closeButton = panel.querySelector('[data-close]');
-        closeButton.addEventListener('pointerdown', e => e.stopPropagation(), true);
-        closeButton.addEventListener('mousedown', e => e.stopPropagation(), true);
-        closeButton.addEventListener('click', closeSyncPanel, true);
-        // Delegation also handles clicks when page code replaces the X element.
-        panel.addEventListener('click', e => {
-            if (e.target.closest?.('[data-close]')) closeSyncPanel(e);
         }, true);
-        panel.addEventListener('keydown', e => {
-            if (e.key === 'Escape') closeSyncPanel(e);
-        }, true);
+        panel.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { event.preventDefault(); removeSyncPanels(); }
+        });
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
         panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
