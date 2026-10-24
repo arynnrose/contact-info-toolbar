@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.376
+// @version      9.6.377
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16216,28 +16216,47 @@ if (pinBtn) {
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
         } finally {busy=false;autoNewBusy=false;}
     }
-    // v376: historical deletes require individual user confirmation; never infer silently.
+    // v377: review only exact, named tombstones; no anonymous confirmations.
     async function reviewPriorDeletions() {
         if (busy || autoNewBusy) return;
         busy=true;
         try {
-            const t=await token();await authorized(t);
+            const t=await token(); await authorized(t);
             const remote=await fetchRemote(t),local=flatten(readLocal());
             const choices=[...local].filter(([id,row])=>
                 DELETE_CATEGORIES.has(row.category) && isDeleted(row) &&
                 remote.has(id) && !isDeleted(remote.get(id)) &&
                 sameMeaning(activeMeaning(row.item_value),activeMeaning(remote.get(id).item_value)));
-            if (!choices.length) {say('No matching previously deleted names or towns found for review.');return;}
-            let approved=0;
-            for (const [id,row] of choices.slice(0,10)) {
-                if (!window.confirm('Sync this previously deleted '+(row.category==='learnedCities'?'town':'name')+
-                    ' to the other computer?\\n'+(row.item_value?.city||row.item_value?.name||row.item_key)+
-                    '\\n\\nOK = delete from shared database; Cancel = skip.')) continue;
-                const latest=await fetchRemote(t),existing=latest.get(id);
-                if (!existing || isDeleted(existing) || !sameMeaning(activeMeaning(existing.item_value),activeMeaning(row.item_value))) continue;
-                await publishDeletion(t,existing,row);approved++;
+            if (!choices.length) {
+                say('No matching historical deletions awaiting review. They may already be published, or have conflicting values.');
+                return;
             }
-            say('Historical deletion review: '+approved+' confirmed deletions published. Other entries unchanged.');
+            let approved=0, skipped=0;
+            for (const [id,row] of choices.slice(0,10)) {
+                const val=row.item_value || {};
+                const label=row.category==='learnedCities'
+                    ? [val.city,val.state].filter(Boolean).join(', ')
+                    : String(val.name || '').trim();
+                // An unnamed record is NEVER offered for deletion.
+                if (!label || label.length<2) {skipped++;continue;}
+                const type=row.category==='learnedCities'?'CITY':'NAME';
+                const answer=window.confirm(
+                    'Confirm shared deletion of '+type+':\n\n'+label+
+                    '\n\nExact storage key: '+row.item_key+
+                    '\n\nOK = delete this entry on synced computers.\nCancel = keep it.');
+                if (!answer) {skipped++;continue;}
+                const latest=await fetchRemote(t),existing=latest.get(id);
+                if (!existing || isDeleted(existing) ||
+                    !sameMeaning(activeMeaning(existing.item_value),activeMeaning(row.item_value))) {
+                    skipped++;continue;
+                }
+                await publishDeletion(t,existing,row);
+                const pending=parse(get('pending_explicit_deletes_v376','{}'));
+                if (pending[id]) {delete pending[id];set('pending_explicit_deletes_v376',JSON.stringify(pending));}
+                approved++;
+            }
+            say('Historical deletion review: '+approved+' named deletions published; '+skipped+
+                ' skipped or canceled. Other entries unchanged.');
         } catch(e){say('Deletion review stopped: '+e.message);}
         finally{busy=false;}
     }
