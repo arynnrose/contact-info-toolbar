@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.368
+// @version      9.6.369
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16128,9 +16128,27 @@ if (pinBtn) {
             say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
         } finally {busy=false;autoNewBusy=false;}
     }
+    // v369: A document-level singleton, including stale panels left by prior versions.
+    // This avoids two independent closures each retaining a different Team Sync panel.
+    const SYNC_PANEL_ID = 'contact-toolbar-team-sync-panel';
+    function removeSyncPanels() {
+        document.querySelectorAll('[data-contact-toolbar-team-sync], #contact-toolbar-team-sync-panel').forEach(el => el.remove());
+        // Legacy panels had no ID. Match only their exact, distinctive heading.
+        document.querySelectorAll('body > div').forEach(el => {
+            if (el.id === SYNC_PANEL_ID) { el.remove(); return; }
+            const first = el.firstElementChild;
+            if (first && first.textContent?.startsWith('Contact Toolbar — Team Sync') && first.querySelector('[data-close]')) el.remove();
+        });
+        panel = null;
+    }
     function openPanel() {
-        if (panel?.isConnected) { panel.remove(); panel=null; return; }
+        const alreadyOpen = !!document.querySelector('[data-contact-toolbar-team-sync]') ||
+            Array.from(document.querySelectorAll('body > div')).some(el => el.firstElementChild?.textContent?.startsWith('Contact Toolbar — Team Sync') && el.firstElementChild.querySelector('[data-close]'));
+        removeSyncPanels();
+        if (alreadyOpen) return;
         panel=document.createElement('div');
+        panel.id = SYNC_PANEL_ID;
+        panel.dataset.contactToolbarTeamSync = 'true';
         panel.style.cssText='position:fixed;z-index:2147483647;right:16px;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;width:355px;max-width:95vw;background:#172332;color:white;border:2px solid #6da9e5;border-radius:9px;padding:14px;font:13px Arial;box-shadow:0 4px 20px #0008';
         panel.innerHTML='<div style="font-weight:bold;font-size:16px">Contact Toolbar — Team Sync <button type="button" data-close aria-label="Close Team Sync" style="float:right;position:relative;z-index:2;cursor:pointer;padding:3px 9px;background:#30475e;color:white;border:1px solid #8baac6;border-radius:4px">X</button></div><p data-sync-status></p><label>Email <input data-email type="email" autocomplete="username" style="width:100%"></label><label>Password <input data-pass type="password" autocomplete="current-password" style="width:100%"></label><p><button data-login>Sign in</button> <button data-logout>Sign out</button></p><hr><p><label>Seed empty database from backup: <input data-file type="file" accept=".json,application/json" style="width:100%"></label></p><p><button data-seed>Upload backup (once)</button> <button data-now>Sync Now</button></p><p><button data-download>Download Missing Only (safe)</button> <button data-compare>Export Comparison</button></p><p><button data-review-open>Review NEW Uploads (max 10 per batch)</button></p><div data-review></div><p><label><input data-auto-new type="checkbox"> Safe automatic sync (NEW entries only, every 2 minutes)</label></p><p style="font-size:11px">Existing backlog and conflicts remain protected. No automatic edits or deletions. To share existing local-only entries, continue using Review NEW Uploads.</p>';
         document.body.appendChild(panel);
@@ -16139,13 +16157,16 @@ if (pinBtn) {
         // v368: capture-phase close prevents interference from host-page click handlers.
         const closeSyncPanel = (event) => {
             if (event) { event.preventDefault(); event.stopPropagation(); }
-            if (panel?.isConnected) panel.remove();
-            panel = null;
+            removeSyncPanels();
         };
         const closeButton = panel.querySelector('[data-close]');
         closeButton.addEventListener('pointerdown', e => e.stopPropagation(), true);
         closeButton.addEventListener('mousedown', e => e.stopPropagation(), true);
         closeButton.addEventListener('click', closeSyncPanel, true);
+        // Delegation also handles clicks when page code replaces the X element.
+        panel.addEventListener('click', e => {
+            if (e.target.closest?.('[data-close]')) closeSyncPanel(e);
+        }, true);
         panel.addEventListener('keydown', e => {
             if (e.key === 'Escape') closeSyncPanel(e);
         }, true);
