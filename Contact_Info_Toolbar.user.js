@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.372
+// @version      9.6.373
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16194,42 +16194,28 @@ if (pinBtn) {
         `;
         shadow.appendChild(panel);
         document.documentElement.appendChild(host);
-        // v372: Close directly and independently of page click handlers.
-        // The page's mask/iframe curtain can redirect pointer targets, so also
-        // recognize clicks by screen coordinates over the visible X button.
+        // v373: event listeners are scoped to this opening and removed on close.
         const closeButton = panel.querySelector('[data-close]');
-        let closed = false;
-        const closeListeners = new AbortController();
-        const captureClose = e => {
-            if (closed || !host.isConnected) return;
-            const path = e.composedPath?.() || [];
-            const direct = path.includes(closeButton);
-            const r = closeButton.getBoundingClientRect();
-            const x = e.clientX, y = e.clientY;
-            const overX = Number.isFinite(x) && Number.isFinite(y) &&
-                x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-            if (!direct && !overX) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            closed = true;
-            closeListeners.abort();
+        const listeners = new AbortController();
+        const closePanel = event => {
+            event?.preventDefault();
+            event?.stopPropagation();
+            listeners.abort();
             host.style.setProperty('display','none','important');
             host.remove();
             if (panel && !panel.isConnected) panel = null;
         };
-        for (const eventType of ['pointerdown','mousedown','click']) {
-            window.addEventListener(eventType, captureClose, {capture:true,signal:closeListeners.signal});
-            closeButton.addEventListener(eventType, captureClose, true);
-        }
-        shadow.addEventListener('keydown', e => {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                closed = true;
-                closeListeners.abort();
-                host.remove();
-                if (panel && !panel.isConnected) panel = null;
-            }
-        },true);
+        const coordinateClose = event => {
+            if (!host.isConnected) return;
+            const rect = closeButton.getBoundingClientRect();
+            if (event.clientX >= rect.left && event.clientX <= rect.right &&
+                event.clientY >= rect.top && event.clientY <= rect.bottom) closePanel(event);
+        };
+        window.addEventListener('pointerdown', coordinateClose, {capture:true,signal:listeners.signal});
+        closeButton.addEventListener('click', closePanel);
+        shadow.addEventListener('keydown', event => {
+            if (event.key === 'Escape') closePanel(event);
+        });
         panel.querySelector('[data-sync-status]').textContent=status;
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
@@ -16241,7 +16227,7 @@ if (pinBtn) {
         panel.querySelector('[data-review-open]').onclick=openUploadReview;
         panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected)panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');}};
     }
-    GM_registerMenuCommand('Contact Toolbar — Team Sync',openPanel);
+    GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
     // v366: Never run the legacy overwrite-capable sync on a timer.
     set('enabled',false);
     setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},120000);
