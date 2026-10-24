@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.390
+// @version      9.6.391
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16377,7 +16377,18 @@ if (pinBtn) {
         const target=panel.querySelector('[data-conflict-report]');
         const button=panel.querySelector('[data-conflicts-open]');
         if (!target || !button) return;
-        const report=parse(get(CONFLICT_REPORT_KEY,'{}'));
+        // The shared parse() helper deliberately rejects arrays. Conflict
+        // details are an array, so read this report with JSON.parse directly.
+        // Otherwise the counter survives while every detail row vanishes.
+        let report={};
+        try {
+            const raw=get(CONFLICT_REPORT_KEY,'{}');
+            report=typeof raw==='string'?JSON.parse(raw):raw;
+            if (!report || typeof report!=='object') report={};
+        } catch(error) {
+            report={};
+            console.warn('[Team Sync] Conflict report could not be decoded:',error);
+        }
         const items=Array.isArray(report.items)?report.items:[];
         const total=Number(report.total)||0;
         button.textContent='View Sync Conflicts ('+total+')';
