@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.385
+// @version      9.6.386
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16002,7 +16002,13 @@ if (pinBtn) {
             for (const [id,row] of remote) {
                 if (local.has(id)) {
                     const here=local.get(id);
-                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) conflicts++;
+                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) {
+                        conflicts++;
+                        noteConflict(id,row,
+                            !!here.deleted!==!!row.deleted
+                                ? 'Deletion status differs between computers; neither version overwritten.'
+                                : 'Same entry exists on both computers with different saved data; local version preserved.');
+                    }
                     continue;
                 }
                 if (row.deleted || row.item_value?.deleted===true) {deletedSkipped++;continue;}
@@ -16279,6 +16285,52 @@ if (pinBtn) {
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
         finally {busy=false;}
     }
+    // v386: Per-computer conflict diagnostics. Read-only; never resolves or overwrites.
+    const CONFLICT_REPORT_KEY='safe_sync_conflict_report_v386';
+    const MAX_CONFLICT_REPORT=200;
+    function storeConflictReport(items) {
+        const report={time:new Date().toISOString(),items:items.slice(0,MAX_CONFLICT_REPORT),
+            total:items.length,truncated:items.length>MAX_CONFLICT_REPORT};
+        set(CONFLICT_REPORT_KEY,JSON.stringify(report));
+        renderConflictReport();
+    }
+    function renderConflictReport() {
+        if (!panel?.isConnected) return;
+        const target=panel.querySelector('[data-conflict-report]');
+        const button=panel.querySelector('[data-conflicts-open]');
+        if (!target || !button) return;
+        const report=parse(get(CONFLICT_REPORT_KEY,'{}'));
+        const items=Array.isArray(report.items)?report.items:[];
+        const total=Number(report.total)||0;
+        button.textContent='View Sync Conflicts ('+total+')';
+        target.replaceChildren();
+        const stamp=document.createElement('div');
+        stamp.textContent=report.time
+            ? 'Last completed check: '+new Date(report.time).toLocaleString()
+            : 'No completed sync check recorded yet.';
+        target.appendChild(stamp);
+        if (!total) {
+            const empty=document.createElement('p');
+            empty.textContent='No conflicts in the last completed sync check.';
+            target.appendChild(empty);
+            return;
+        }
+        for (const entry of items) {
+            const line=document.createElement('div');
+            line.className='activity-row';
+            const title=document.createElement('strong');
+            title.textContent=entry.category+' — '+entry.key;
+            const explanation=document.createElement('div');
+            explanation.textContent=entry.reason;
+            line.append(title,explanation);
+            target.appendChild(line);
+        }
+        if (report.truncated) {
+            const notice=document.createElement('p');
+            notice.textContent='Showing first '+items.length+' of '+total+' conflicts.';
+            target.appendChild(notice);
+        }
+    }
     async function autoNewTick() {
         if (busy || autoNewBusy || !get(AUTO_NEW_ENABLED_KEY,false)) return;
         autoNewBusy=true; busy=true;
@@ -16288,6 +16340,12 @@ if (pinBtn) {
             await flushActivity(t);
             if (!remote.size) throw new Error('Remote database is empty');
             const data=readLocal(), local=flatten(data);
+            const conflictDetails=new Map();
+            const noteConflict=(id,row,reason)=>{
+                const category=String(row?.category||id.split('\\u0000')[0]||'unknown');
+                const key=String(row?.item_key||id.split('\\u0000')[1]||id);
+                conflictDetails.set(id+'|'+reason,{category,key,reason});
+            };
             const seen=parse(get(AUTO_NEW_SEEN_KEY,'{}'));
             // Only keys created locally AFTER activation qualify for upload.
             const fresh=[...local].filter(([id,row])=>!seen[id] && !remote.has(id) && !row.deleted && !row.item_value?.deleted && !reviewFlag(row));
@@ -16322,13 +16380,13 @@ if (pinBtn) {
             for (const [id,entry] of pendingRows) {
                 if (!DELETE_CATEGORIES.has(entry.category)) continue;
                 const localRow=localForDeletes.get(id), existing=remote.get(id);
-                if (!localRow || !isDeleted(localRow)) {deleteConflicts++;continue;}
-                if (!existing) {deleteConflicts++;continue;}
+                if (!localRow || !isDeleted(localRow)) {deleteConflicts++;noteConflict(id,entry,'Pending deletion could not be verified in local data; no deletion sent.');continue;}
+                if (!existing) {deleteConflicts++;noteConflict(id,entry,'Pending deletion has no matching shared record; no deletion sent.');continue;}
                 if (isDeleted(existing)) {
                     delete pending[id];set(pendingKey,JSON.stringify(pending));continue;
                 }
                 if (!sameMeaning(activeMeaning(existing.item_value),activeMeaning(localRow.item_value))) {
-                    deleteConflicts++;continue;
+                    deleteConflicts++;noteConflict(id,localRow,'Pending deletion differs from shared entry; protected against overwrite.');continue;
                 }
                 await publishDeletion(t,existing,localRow);
                 delete pending[id];set(pendingKey,JSON.stringify(pending));
@@ -16343,7 +16401,7 @@ if (pinBtn) {
                 const here=localForDeletes.get(id);
                 if (!here || isDeleted(here)) continue;
                 if (!sameMeaning(activeMeaning(here.item_value),activeMeaning(row.item_value))) {
-                    deleteConflicts++;continue;
+                    deleteConflicts++;noteConflict(id,row,'Shared deletion differs from local entry; local version preserved.');continue;
                 }
                 data[row.category][row.item_key]={...here.item_value,deleted:true,
                     deletedAt:row.item_value?.deletedAt||Date.now()};
@@ -16370,6 +16428,7 @@ if (pinBtn) {
             set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
             // Snapshot only after all remote writes and local imports have succeeded.
             set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(flatten(data))));
+            storeConflictReport([...conflictDetails.values()]);
             say('Safe auto sync: '+uploaded+' new uploaded, '+downloaded+' missing downloaded, '+conflicts+' conflicts protected; '+deletesUploaded+' deletions uploaded, '+deletesDownloaded+' deletions downloaded, '+deleteConflicts+' deletion conflicts protected. No other overwrites.'+((downloaded||deletesDownloaded)?' Reload page to refresh caches.':''));
         } catch(e) {
             set(AUTO_NEW_ENABLED_KEY,false);
@@ -16488,7 +16547,8 @@ if (pinBtn) {
           <div class="status" data-sync-status></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (every 30 seconds)</b></label>
-          <div class="actions"><button data-activity-open>View Shared Activity Log</button></div>
+          <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
+          <div class="activity" data-conflict-report hidden></div>
           <label class="field">This computer's log name (future entries)<input data-device-label type="text" maxlength="60" placeholder="e.g. Main PC"></label>
           <div class="status" data-device-save-status aria-live="polite"></div>
           <div class="activity" data-activity hidden></div>
@@ -16545,6 +16605,12 @@ if (pinBtn) {
         panel.querySelector('[data-compare]').onclick=compareAndDownload;
         panel.querySelector('[data-review-open]').onclick=openUploadReview;
         panel.querySelector('[data-review-deletes]').onclick=()=>void reviewPriorDeletions();
+        panel.querySelector('[data-conflicts-open]').onclick=()=>{
+            const report=panel.querySelector('[data-conflict-report]');
+            report.hidden=!report.hidden;
+            if (!report.hidden) renderConflictReport();
+        };
+        renderConflictReport();
         panel.querySelector('[data-activity-open]').onclick=()=>void showSharedActivity();
         const labelInput=panel.querySelector('[data-device-label]');
         labelInput.value=deviceLabel();
