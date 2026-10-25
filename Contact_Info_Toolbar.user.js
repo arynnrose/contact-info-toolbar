@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.392
+// @version      9.6.394
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16280,6 +16280,7 @@ if (pinBtn) {
             set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
             if (get(DELETE_SNAPSHOT_KEY,null)===null) set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(local)));
             set(AUTO_NEW_ENABLED_KEY,true);
+            if (get(AUTO_BASELINE_KEY,null)===null) set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
             set('enabled',false); // legacy sync remains disabled
             say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town/area-code deletions sync; new entries and safe downloads continue every 30 seconds.');
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
@@ -16330,6 +16331,30 @@ if (pinBtn) {
     }
     // v390: Build a fresh read-only report from both data sets when requested.
     // This does not depend on cached diagnostic entries or change sync state.
+    // v393: Field-level, read-only comparison of actual local and shared values.
+    function fieldDifferences(localValue, sharedValue) {
+        const differences=[];
+        const isObj=v=>v!==null && typeof v==='object' && !Array.isArray(v);
+        const show=v=>v===undefined?'(not present)':v===null?'null':
+            typeof v==='string'?v:JSON.stringify(v);
+        function walk(a,b,path,depth=0) {
+            if (differences.length>=80) return;
+            if (depth>8 || Array.isArray(a) || Array.isArray(b) ||
+                (!isObj(a) && !isObj(b))) {
+                if (stable(a)!==stable(b)) differences.push({
+                    field:path||'(value)',local:show(a),shared:show(b)});
+                return;
+            }
+            const keys=new Set([...Object.keys(isObj(a)?a:{}),...Object.keys(isObj(b)?b:{})]);
+            for (const key of [...keys].sort()) {
+                if (SYNC_METADATA_KEYS.has(key)) continue;
+                walk(isObj(a)?a[key]:undefined,isObj(b)?b[key]:undefined,
+                    path?path+'.'+key:key,depth+1);
+            }
+        }
+        walk(meaningful(localValue),meaningful(sharedValue),'');
+        return differences;
+    }
     let conflictInspectionBusy=false;
     async function inspectSyncConflicts() {
         const target=panel?.querySelector('[data-conflict-report]');
@@ -16343,8 +16368,13 @@ if (pinBtn) {
             const local=flatten(readLocal());
             const found=new Map();
             const note=(id,row,reason)=>{
+                const localRow=local.get(id), sharedRow=remote.get(id);
                 found.set(id+'|'+reason,{category:row.category,item_key:row.item_key,
-                    key:row.item_key,reason});
+                    key:row.item_key,reason,
+                    differences:localRow && sharedRow
+                        ? fieldDifferences(localRow.item_value,sharedRow.item_value):[],
+                    localDeleted:localRow?isDeleted(localRow):null,
+                    sharedDeleted:sharedRow?isDeleted(sharedRow):null});
             };
             for (const [id,shared] of remote) {
                 const here=local.get(id);
@@ -16436,6 +16466,42 @@ if (pinBtn) {
             const explanation=document.createElement('div');
             explanation.textContent=entry.reason;
             line.append(title,explanation);
+            if (Array.isArray(entry.differences)) {
+                const details=document.createElement('details');
+                details.style.marginTop='7px';
+                const summary=document.createElement('summary');
+                summary.style.cursor='pointer';
+                summary.textContent='Compare values ('+entry.differences.length+
+                    ' differing field'+(entry.differences.length===1?'':'s')+')';
+                details.appendChild(summary);
+                if (entry.localDeleted!==null && entry.sharedDeleted!==null &&
+                    entry.localDeleted!==entry.sharedDeleted) {
+                    const status=document.createElement('div');
+                    status.textContent='Deletion status — This computer: '+
+                        (entry.localDeleted?'Deleted':'Active')+
+                        ' | Shared: '+(entry.sharedDeleted?'Deleted':'Active');
+                    status.style.padding='6px 0';
+                    details.appendChild(status);
+                }
+                if (!entry.differences.length) {
+                    const none=document.createElement('p');
+                    none.textContent='No differing content fields after ignoring bookkeeping timestamps. Check deletion status above.';
+                    details.appendChild(none);
+                }
+                for (const diff of entry.differences) {
+                    const field=document.createElement('div');
+                    field.style.cssText='padding:8px 0;border-top:1px solid #42546b;overflow-wrap:anywhere;';
+                    const name=document.createElement('strong');
+                    name.textContent=diff.field;
+                    const localLine=document.createElement('div');
+                    localLine.textContent='This computer: '+diff.local;
+                    const sharedLine=document.createElement('div');
+                    sharedLine.textContent='Shared database: '+diff.shared;
+                    field.append(name,localLine,sharedLine);
+                    details.appendChild(field);
+                }
+                line.appendChild(details);
+            }
             if (entry.category==='customAreaCodes' &&
                 entry.reason.includes('Shared entry is DELETED')) {
                 const button=document.createElement('button');
@@ -16474,120 +16540,125 @@ if (pinBtn) {
         el.style.color=problem?'#ffd58a':'#bde8c8';
     }
     setInterval(renderLastAutoSync,1000);
+    // v394: automatic two-way synchronization of deliberate local changes.
+    // The first observation is a baseline, not an instruction to delete or
+    // overwrite old data. Subsequent changes persist in a local outbox.
+    const AUTO_BASELINE_KEY='automatic_baseline_v394';
+    const AUTO_OUTBOX_KEY='automatic_outbox_v394';
+    const AUTO_MAX_WRITES=10;
+    function autoSnapshot() {
+        const snapshot={};
+        for (const [id,row] of flatten(readLocal())) snapshot[id]=row.item_value;
+        return snapshot;
+    }
+    function observeLocalChanges() {
+        if (!get(AUTO_NEW_ENABLED_KEY,false) || busy || autoNewBusy) return;
+        const now=autoSnapshot();
+        const saved=get(AUTO_BASELINE_KEY,null);
+        if (saved===null) {set(AUTO_BASELINE_KEY,JSON.stringify(now));return;}
+        const before=parse(saved),pending=parse(get(AUTO_OUTBOX_KEY,'{}'));
+        let changed=false;
+        for (const id of new Set([...Object.keys(before),...Object.keys(now)])) {
+            if (stable(before[id])===stable(now[id])) continue;
+            const split=id.indexOf('\u0000');
+            if (split<0) continue;
+            const category=id.slice(0,split),item_key=id.slice(split+1);
+            if (!Object.prototype.hasOwnProperty.call(CATEGORIES,category)) continue;
+            // A physically removed entry is an explicit deletion only when
+            // it existed in the previous live baseline.
+            const value=Object.prototype.hasOwnProperty.call(now,id)
+                ? now[id]
+                : {...(before[id] && typeof before[id]==='object'?before[id]:{}),deleted:true,deletedAt:Date.now()};
+            pending[id]={category,item_key,item_value:value,deleted:!!value?.deleted,
+                changedAt:new Date().toISOString()};
+            changed=true;
+        }
+        if (changed) {
+            set(AUTO_OUTBOX_KEY,JSON.stringify(pending));
+            set(AUTO_BASELINE_KEY,JSON.stringify(now));
+        }
+    }
     async function autoNewTick() {
         if (busy || autoNewBusy || !get(AUTO_NEW_ENABLED_KEY,false)) return;
-        autoNewBusy=true; busy=true;
+        observeLocalChanges();
+        autoNewBusy=true;busy=true;
         try {
-            const t=await token(); await authorized(t);
+            const t=await token();await authorized(t);
             let remote=await fetchRemote(t);
             await flushActivity(t);
             if (!remote.size) throw new Error('Remote database is empty');
-            const data=readLocal(), local=flatten(data);
-            const conflictDetails=new Map();
-            const noteConflict=(id,row,reason)=>{
-                const category=String(row?.category||id.split('\\u0000')[0]||'unknown');
-                const key=String(row?.item_key||id.split('\\u0000')[1]||id);
-                conflictDetails.set(id+'|'+reason,{category,key,reason});
-            };
-            const seen=parse(get(AUTO_NEW_SEEN_KEY,'{}'));
-            // Only keys created locally AFTER activation qualify for upload.
-            const fresh=[...local].filter(([id,row])=>!seen[id] && !remote.has(id) && !row.deleted && !row.item_value?.deleted && !reviewFlag(row));
-            // Do not consume new keys if upload fails: retry next interval.
-            let uploaded=0;
-            for (const [id,row] of fresh.slice(0,AUTO_NEW_LIMIT)) {
-                // Recheck the remote key immediately before CREATE, without upsert.
-                remote=await fetchRemote(t);
-                if (remote.has(id)) {seen[id]=true;continue;}
-                const latest=flatten(readLocal()).get(id);
-                if (!latest || latest.deleted || !sameMeaning(latest.item_value,row.item_value)) continue;
-                await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',rowFor(row,identity()),t,{'Prefer':'return=representation'});
-                remote=await fetchRemote(t);
-                const stored=remote.get(id);
-                if (!stored || !sameMeaning(stored.item_value,row.item_value) || !!stored.deleted!==!!row.deleted) throw new Error('Readback failed for '+row.item_key);
-                seen[id]=true; uploaded++;
-                await recordActivity(t,'Added (uploaded)',row);
-                set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
-            }
-            // v375: propagate only observed active -> deleted transitions.
-            // A missing local key, old tombstone, or preexisting backlog is NEVER a delete.
-            const beforeDeletes=get(DELETE_SNAPSHOT_KEY,null);
-            const previousDeletes=beforeDeletes===null ? null : parse(beforeDeletes);
-            const localForDeletes=flatten(readLocal());
-            let deletesUploaded=0,deletesDownloaded=0,deleteConflicts=0;
-            // Explicit queue survives OFF/ON, restarts, and unsuccessful attempts.
-            const pendingKey='pending_explicit_deletes_v376';
-            const pending=parse(get(pendingKey,'{}'));
-            const pendingRows=Object.entries(pending);
-            if (pendingRows.length > MAX_DELETE_WRITES)
-                throw new Error('SAFETY STOP: '+pendingRows.length+' pending deletions; review before sending more than 10.');
-            for (const [id,entry] of pendingRows) {
-                if (!DELETE_CATEGORIES.has(entry.category)) continue;
-                const localRow=localForDeletes.get(id), existing=remote.get(id);
-                if (!localRow || !isDeleted(localRow)) {deleteConflicts++;noteConflict(id,entry,'Pending deletion could not be verified in local data; no deletion sent.');continue;}
-                if (!existing) {deleteConflicts++;noteConflict(id,entry,'Pending deletion has no matching shared record; no deletion sent.');continue;}
-                if (isDeleted(existing)) {
-                    delete pending[id];set(pendingKey,JSON.stringify(pending));continue;
-                }
-                if (!sameMeaning(activeMeaning(existing.item_value),activeMeaning(localRow.item_value))) {
-                    deleteConflicts++;noteConflict(id,localRow,'Pending deletion differs from shared entry; protected against overwrite.');continue;
-                }
-                await publishDeletion(t,existing,localRow);
-                delete pending[id];set(pendingKey,JSON.stringify(pending));
-                deletesUploaded++;
-                await recordActivity(t,'Deleted (uploaded)',localRow);
-                remote=await fetchRemote(t);
-            }
-            // Download remote tombstones only for identical active records.
-            // Never overwrite a locally edited or separately deleted record.
-            for (const [id,row] of remote) {
-                if (!DELETE_CATEGORIES.has(row.category) || !isDeleted(row)) continue;
-                const here=localForDeletes.get(id);
-                if (!here || isDeleted(here)) continue;
-                if (!sameMeaning(activeMeaning(here.item_value),activeMeaning(row.item_value))) {
-                    deleteConflicts++;noteConflict(id,row,'Shared deletion differs from local entry; local version preserved.');continue;
-                }
-                data[row.category][row.item_key]={...here.item_value,deleted:true,
-                    deletedAt:row.item_value?.deletedAt||Date.now()};
-                deletesDownloaded++;
-                await recordActivity(t,'Deletion received',row);
-            }
-            // Protect existing local values; import only missing, nondeleted keys.
-            let downloaded=0,conflicts=0;
-            for (const [id,row] of remote) {
-                if (local.has(id)) {
-                    const here=local.get(id);
-                    if (!sameMeaning(here.item_value,row.item_value)||!!here.deleted!==!!row.deleted) {
-                        conflicts++;
-                        const localDeleted=isDeleted(here), remoteDeleted=isDeleted(row);
-                        const reason=localDeleted!==remoteDeleted
-                            ? (remoteDeleted ? 'Shared entry is DELETED, but this computer has an active entry. Re-adding requires explicit restoration.' : 'Local entry is DELETED but shared entry is active; protected.')
-                            : 'Different saved values on both computers; local version preserved.';
-                        noteConflict(id,row,reason);
-                    }
+            const pending=parse(get(AUTO_OUTBOX_KEY,'{}'));
+            const changes=Object.entries(pending).slice(0,AUTO_MAX_WRITES);
+            let uploaded=0,deletesUploaded=0,downloaded=0,deletesDownloaded=0,skipped=0;
+            const conflicts=[];
+            for (const [id,change] of changes) {
+                // Never write if the user has edited the same entry again since
+                // this outbox event was captured; the next observer will queue it.
+                const live=flatten(readLocal()).get(id);
+                if (live && !sameMeaning(live.item_value,change.item_value)) continue;
+                const existing=remote.get(id);
+                if (existing && existing.updated_at &&
+                    Date.parse(existing.updated_at)>Date.parse(change.changedAt)) {
+                    // A newer shared edit wins. Discard the older pending edit.
+                    delete pending[id];set(AUTO_OUTBOX_KEY,JSON.stringify(pending));
+                    skipped++;
                     continue;
                 }
-                if (row.deleted || row.item_value?.deleted || !Object.prototype.hasOwnProperty.call(CATEGORIES,row.category)) continue;
-                data[row.category][row.item_key]=row.item_value;
-                seen[id]=true; downloaded++;
-                await recordActivity(t,'Added (downloaded)',row);
+                const payload={category:change.category,item_key:change.item_key,
+                    item_value:change.item_value,deleted:!!change.deleted,
+                    updated_by:identity(),updated_at:new Date().toISOString()};
+                if (existing) {
+                    const path='/rest/v1/toolbar_shared_items?category=eq.'+
+                        encodeURIComponent(change.category)+'&item_key=eq.'+
+                        encodeURIComponent(change.item_key)+'&updated_at=eq.'+
+                        encodeURIComponent(existing.updated_at)+'&select=category,item_key';
+                    await request('PATCH',path,payload,t,{'Prefer':'return=representation'});
+                } else {
+                    await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',
+                        payload,t,{'Prefer':'return=representation'});
+                }
+                remote=await fetchRemote(t);
+                const confirmed=remote.get(id);
+                if (!confirmed || !sameMeaning(confirmed.item_value,payload.item_value) ||
+                    isDeleted(confirmed)!==!!payload.deleted)
+                    throw new Error('Shared write did not verify for '+change.item_key);
+                delete pending[id];set(AUTO_OUTBOX_KEY,JSON.stringify(pending));
+                if (change.deleted) deletesUploaded++;else uploaded++;
+                await recordActivity(t,change.deleted?'Deleted (uploaded)':'Added/updated (uploaded)',change);
             }
-            if (downloaded || deletesDownloaded) writeLocal(data);
-            // Mark only entries that already existed remotely as seen; unresolved
-            // local-only entries remain eligible next time unless flagged.
-            for (const id of remote.keys()) seen[id]=true;
-            set(AUTO_NEW_SEEN_KEY,JSON.stringify(seen));
-            // Snapshot only after all remote writes and local imports have succeeded.
-            set(DELETE_SNAPSHOT_KEY,JSON.stringify(snapshotLocal(flatten(data))));
-            storeConflictReport([...conflictDetails.values()]);
+            // Shared database is authoritative for entries without a pending
+            // local edit. This includes restoring a formerly deleted entry.
+            const data=readLocal(),local=flatten(data);
+            for (const [id,row] of remote) {
+                if (!Object.prototype.hasOwnProperty.call(CATEGORIES,row.category)) continue;
+                if (Object.prototype.hasOwnProperty.call(pending,id)) {
+                    conflicts.push({category:row.category,key:row.item_key,
+                        reason:'Local edit is queued for a later sync cycle.'});
+                    continue;
+                }
+                const here=local.get(id);
+                if (here && sameMeaning(here.item_value,row.item_value) &&
+                    isDeleted(here)===isDeleted(row)) continue;
+                data[row.category][row.item_key]=row.item_value;
+                if (isDeleted(row)) deletesDownloaded++;else downloaded++;
+                await recordActivity(t,isDeleted(row)?'Deletion received':'Added/updated (downloaded)',row);
+            }
+            if (downloaded || deletesDownloaded) {
+                writeLocal(data);
+                // Do not re-queue changes that came from Supabase.
+                set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
+            }
+            storeConflictReport(conflicts);
             set(LAST_AUTO_SYNC_KEY,Date.now());
-            set(LAST_AUTO_SYNC_ERROR_KEY,'');
-            renderLastAutoSync();
-            say('Safe auto sync: '+uploaded+' new uploaded, '+downloaded+' missing downloaded, '+conflicts+' conflicts protected; '+deletesUploaded+' deletions uploaded, '+deletesDownloaded+' deletions downloaded, '+deleteConflicts+' deletion conflicts protected. No other overwrites.'+((downloaded||deletesDownloaded)?' Reload page to refresh caches.':''));
+            set(LAST_AUTO_SYNC_ERROR_KEY,'');renderLastAutoSync();
+            say('Auto sync: '+uploaded+' additions/updates uploaded, '+deletesUploaded+
+                ' deletions uploaded, '+downloaded+' additions/updates received, '+
+                deletesDownloaded+' deletions received, '+skipped+
+                ' older local edits superseded; '+Object.keys(pending).length+
+                ' pending changes. Last completed successfully.');
         } catch(e) {
-            set(AUTO_NEW_ENABLED_KEY,false);
-            set(LAST_AUTO_SYNC_ERROR_KEY,String(e.message||e));
-            renderLastAutoSync();
-            say('Safe automatic sync PAUSED after error: '+e.message+'. No automatic retries until re-enabled.');
+            set(LAST_AUTO_SYNC_ERROR_KEY,String(e.message||e));renderLastAutoSync();
+            say('Automatic sync error (will retry): '+e.message);
         } finally {busy=false;autoNewBusy=false;}
     }
     // v377: review only exact, named tombstones; no anonymous confirmations.
@@ -16702,7 +16773,7 @@ if (pinBtn) {
           <div class="status" data-sync-status></div>
           <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
           <hr>
-          <label class="toggle"><input data-auto-new type="checkbox"><b>Safe automatic sync (every 30 seconds)</b></label>
+          <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every 30 seconds)</b></label>
           <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
           <div class="activity" data-conflict-report hidden></div>
           <label class="field">This computer's log name (future entries)<input data-device-label type="text" maxlength="60" placeholder="e.g. Main PC"></label>
@@ -16723,7 +16794,7 @@ if (pinBtn) {
             <label class="field">Seed empty database from backup:<input data-file type="file" accept=".json,application/json"></label>
             <div class="actions"><button data-seed>Upload backup (once)</button></div>
           </details>
-          <p class="note">New entries and explicit name/town/area-code deletions sync automatically. Existing conflicts are protected.</p>
+          <p class="note">New additions, edits, and deletions sync automatically. The newest saved change takes precedence; the first observation does not treat missing data as a deletion.</p>
         `;
         shadow.appendChild(panel);
         document.documentElement.appendChild(host);
@@ -16802,6 +16873,10 @@ if (pinBtn) {
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
     // v366: Never run the legacy overwrite-capable sync on a timer.
     set('enabled',false);
+    // Observe explicit local edits promptly, including while Firefox is offline.
+    if (get(AUTO_NEW_ENABLED_KEY,false) && get(AUTO_BASELINE_KEY,null)===null)
+        set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
+    setInterval(observeLocalChanges,1000);
     setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},30000);
     console.info('Toolbar v363 team sync available via Tampermonkey menu (OFF by default).');
 })();
