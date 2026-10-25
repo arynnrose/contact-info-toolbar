@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.391
+// @version      9.6.392
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16292,7 +16292,12 @@ if (pinBtn) {
         const report={time:new Date().toISOString(),items:items.slice(0,MAX_CONFLICT_REPORT),
             total:items.length,truncated:items.length>MAX_CONFLICT_REPORT};
         set(CONFLICT_REPORT_KEY,JSON.stringify(report));
-        renderConflictReport();
+        const visible=panel?.querySelector('[data-conflict-report]');
+        if (!visible || visible.hidden) renderConflictReport();
+        else {
+            const button=panel.querySelector('[data-conflicts-open]');
+            if (button) button.textContent='View Sync Conflicts ('+items.length+')';
+        }
     }
     async function restoreSharedAreaCode(area) {
         if (busy || autoNewBusy) {say('Wait for the current sync to finish, then retry.');return;}
@@ -16366,13 +16371,16 @@ if (pinBtn) {
                     !sameMeaning(activeMeaning(here.item_value),activeMeaning(shared.item_value)))
                     note(id,here,'Pending deletion differs from shared entry; no deletion sent.');
             }
-            storeConflictReport([...found.values()]);
-            renderConflictReport();
+            const inspected=[...found.values()];
+            // Keep the inspection visible and independent of the background
+            // sync's separately generated snapshot.
+            renderConflictReport({time:new Date().toISOString(),
+                items:inspected,total:inspected.length,truncated:false},true);
         } catch(error) {
             target.textContent='Could not inspect conflicts: '+String(error.message||error);
         } finally {conflictInspectionBusy=false;}
     }
-    function renderConflictReport() {
+    function renderConflictReport(explicitReport=null,liveInspection=false) {
         if (!panel?.isConnected) return;
         const target=panel.querySelector('[data-conflict-report]');
         const button=panel.querySelector('[data-conflicts-open]');
@@ -16389,13 +16397,14 @@ if (pinBtn) {
             report={};
             console.warn('[Team Sync] Conflict report could not be decoded:',error);
         }
+        if (explicitReport && typeof explicitReport==='object') report=explicitReport;
         const items=Array.isArray(report.items)?report.items:[];
         const total=Number(report.total)||0;
         button.textContent='View Sync Conflicts ('+total+')';
         target.replaceChildren();
         const stamp=document.createElement('div');
         stamp.textContent=report.time
-            ? 'Last completed check: '+new Date(report.time).toLocaleString()
+            ? (liveInspection?'Live inspection: ':'Last completed check: ')+new Date(report.time).toLocaleString()
             : 'No completed sync check recorded yet.';
         target.appendChild(stamp);
         const summary=document.createElement('div');
@@ -16403,6 +16412,11 @@ if (pinBtn) {
         summary.textContent=total+' protected conflict entr'+(total===1?'y':'ies')+
             ' in last report; '+items.length+' detail row(s) saved.';
         target.appendChild(summary);
+        const rerun=document.createElement('button');
+        rerun.type='button';rerun.textContent='Refresh conflict details now';
+        rerun.style.margin='8px 0';
+        rerun.addEventListener('click',()=>void inspectSyncConflicts());
+        target.appendChild(rerun);
         if (total && !items.length) {
             const warning=document.createElement('p');
             warning.textContent='The saved conflict details are missing. Click View Sync Conflicts again to rebuild the list.';
@@ -16759,7 +16773,6 @@ if (pinBtn) {
         panel.querySelector('[data-review-deletes]').onclick=()=>void reviewPriorDeletions();
         panel.querySelector('[data-conflicts-open]').onclick=()=>{
             const report=panel.querySelector('[data-conflict-report]');
-            if (!report.hidden) {report.hidden=true;return;}
             void inspectSyncConflicts();
         };
         renderConflictReport();
