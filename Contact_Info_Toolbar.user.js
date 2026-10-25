@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.394
+// @version      9.6.395
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -16469,10 +16469,11 @@ if (pinBtn) {
             if (Array.isArray(entry.differences)) {
                 const details=document.createElement('details');
                 details.style.marginTop='7px';
+                details.open=true; // v395: always show actual differences by default
                 const summary=document.createElement('summary');
                 summary.style.cursor='pointer';
-                summary.textContent='Compare values ('+entry.differences.length+
-                    ' differing field'+(entry.differences.length===1?'':'s')+')';
+                summary.textContent='Actual differences — '+entry.differences.length+
+                    ' content field'+(entry.differences.length===1?'':'s')+' different';
                 details.appendChild(summary);
                 if (entry.localDeleted!==null && entry.sharedDeleted!==null &&
                     entry.localDeleted!==entry.sharedDeleted) {
@@ -16485,18 +16486,22 @@ if (pinBtn) {
                 }
                 if (!entry.differences.length) {
                     const none=document.createElement('p');
-                    none.textContent='No differing content fields after ignoring bookkeeping timestamps. Check deletion status above.';
+                    none.textContent=entry.localDeleted!==entry.sharedDeleted
+                        ? 'The deletion status differs (shown above). No other meaningful fields differ.'
+                        : 'No differing content fields after ignoring bookkeeping timestamps. The conflict may be due to record-level flags or metadata; neither copy was changed.';
                     details.appendChild(none);
                 }
                 for (const diff of entry.differences) {
                     const field=document.createElement('div');
                     field.style.cssText='padding:8px 0;border-top:1px solid #42546b;overflow-wrap:anywhere;';
                     const name=document.createElement('strong');
-                    name.textContent=diff.field;
+                    name.textContent='Different field: '+diff.field;
                     const localLine=document.createElement('div');
                     localLine.textContent='This computer: '+diff.local;
                     const sharedLine=document.createElement('div');
                     sharedLine.textContent='Shared database: '+diff.shared;
+                    localLine.style.marginTop='3px';
+                    sharedLine.style.marginTop='3px';
                     field.append(name,localLine,sharedLine);
                     details.appendChild(field);
                 }
