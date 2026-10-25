@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.395
+// @version      9.6.396
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -12076,6 +12076,11 @@ function refreshSettingsListsFromStorage(force=false) {
     }
 }
 setInterval(()=>refreshSettingsListsFromStorage(),600);
+// v396: Settings owns these caches and refresh functions; Team Sync only signals.
+window.addEventListener('frt7:team-sync-data-updated',()=>{
+    try { refreshSettingsListsFromStorage(true); }
+    catch(error) { console.warn('Team Sync Settings refresh failed:',error); }
+});
 
 function renderLearnedCitiesSettings() {
         const container = settingsPanel.querySelector("#frt7-learned-cities-list");
@@ -15721,9 +15726,9 @@ if (pinBtn) {
     function writeLocal(data) {
         // Keep live Settings lists and lookup caches consistent with downloaded records.
         for (const [cat,key] of Object.entries(CATEGORIES)) GM_setValue(key, JSON.stringify(data[cat] || {}));
-        learnedCitiesCache = parseLearnedCitiesStore(GM_getValue(LEARNED_CITIES_SINGLE_DB_KEY,'{}'));
-        loadCustomAreaCodes();
-        if (settingsPanel?.isConnected) refreshSettingsListsFromStorage(true);
+        // Team Sync is in a separate closure from the Settings UI.
+        // Notify the Settings owner instead of accessing its private variables.
+        window.dispatchEvent(new Event('frt7:team-sync-data-updated'));
     }
     function request(method, path, body, token, headers = {}) {
         return new Promise((resolve,reject) => GM_xmlhttpRequest({
