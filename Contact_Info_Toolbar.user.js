@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.403
+// @version      9.6.405
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -2886,7 +2886,7 @@ const NAME_SUFFIXES = new Set([
 // v31: professional/academic credentials that may be printed directly after
 // a person's name. These are never part of First Name or Last Name.
 const NAME_CREDENTIALS = new Set([
-    "CPC", "CPC-A", "CPCA",
+    "CPC", "CPC-A", "CPCA", "CAM",
     "MBA", "AAI", "ASCR", "MSA", "LCSW", "LSW", "SIFI", "PMHNB", "BSN", "MSN", "BCAS", "NRST", "PRC", "EA", "LMSW", "MPA", "MHA", "MPH", "MS", "MA", "BS", "BBA", "BA",
     "PHD", "PHD.", "ED.D", "EDD",
     "MD", "MD.", "DO", "DO.",
@@ -2896,6 +2896,27 @@ const NAME_CREDENTIALS = new Set([
     "SHRM-CP", "SHRM-SCP"
 ]);
 
+// Shared, editable credential overrides. Tombstones preserve deletions across PCs.
+const FRT7_NAME_CREDENTIALS_KEY = "frt7_name_credentials_v405";
+function frt7CredentialOverrides() {
+    try { const raw=GM_getValue(FRT7_NAME_CREDENTIALS_KEY,'{}'); const v=typeof raw==='string'?JSON.parse(raw):raw; return v && typeof v==='object' && !Array.isArray(v)?v:{}; }
+    catch (_) { return {}; }
+}
+function frt7CredentialIsActive(value) {
+    const key=normalizeNameCredentialToken(value);
+    const db=frt7CredentialOverrides();
+    if (Object.prototype.hasOwnProperty.call(db,key)) return db[key]?.deleted !== true;
+    return NAME_CREDENTIALS.has(key) || NAME_CREDENTIALS.has(key.replace(/\./g,''));
+}
+function frt7SetCredential(value,active) {
+    const key=normalizeNameCredentialToken(value);
+    if (!/^[A-Z0-9][A-Z0-9.\-]{0,29}$/.test(key)) return false;
+    const db=frt7CredentialOverrides();
+    db[key]={name:key,deleted:!active,updatedAt:Date.now()};
+    GM_setValue(FRT7_NAME_CREDENTIALS_KEY,JSON.stringify(db));
+    window.dispatchEvent(new Event('frt7:credentials-changed'));
+    return true;
+}
 function normalizeNameCredentialToken(value) {
     return String(value || "")
         .trim()
@@ -2913,7 +2934,7 @@ function isNameCredentialToken(value) {
     const noPeriods = token.replace(/\./g, "");
     if (NAME_TITLES.has(noPeriods)) return true;
     if (NAME_SUFFIXES.has(token) || NAME_SUFFIXES.has(noPeriods)) return true;
-    if (NAME_CREDENTIALS.has(token) || NAME_CREDENTIALS.has(noPeriods)) return true;
+    if (frt7CredentialIsActive(token) || frt7CredentialIsActive(noPeriods)) return true;
 
     return false;
 }
@@ -12006,6 +12027,13 @@ settingsPanel.innerHTML = `
         <button type="button" id="frt7-clear-safe-first-names">Clear Safe First Names</button>
 
         <div style="border-top:1px solid #bbb;margin-top:10px;padding-top:9px;">
+          <b style="font-size:12px;">Credentials — excluded from names (Team Sync)</b>
+          <div style="margin:5px 0;color:#666;">Add or remove credentials excluded from First/Last Name. Changes sync when Team Sync is enabled.</div>
+          <div style="display:flex;gap:6px;margin-bottom:6px;"><input id="frt7-credential-input" type="text" placeholder="e.g. CAM" style="flex:1;min-width:0;padding:6px;"><button type="button" id="frt7-credential-add">Add</button></div>
+          <div id="frt7-credential-status" style="font-size:11px;margin-bottom:5px;"></div>
+          <div id="frt7-credential-list" style="max-height:150px;overflow:auto;border:1px solid #bbb;padding:6px;"></div>
+        </div>
+        <div style="border-top:1px solid #bbb;margin-top:10px;padding-top:9px;">
           <b style="font-size:12px;">Learned Mac Last Names</b>
           <div style="margin:5px 0 7px;color:#666;line-height:1.3;">
             Mac names are normally left as Macon / Macdonald. If you manually type a Last Name such as MacDonald, that exact surname capitalization is saved and reused in the future.
@@ -12166,6 +12194,31 @@ for (const id of ["#frt7-custom-area-code", "#frt7-custom-area-city", "#frt7-cus
     });
 }
 renderCustomAreaCodesSettings();
+function frt7RenderCredentials() {
+    const list=settingsPanel.querySelector('#frt7-credential-list'); if(!list) return;
+    list.replaceChildren();
+    const db=frt7CredentialOverrides();
+    const keys=new Set([...NAME_CREDENTIALS,...Object.keys(db)]);
+    for(const key of [...keys].sort()) {
+        if(!frt7CredentialIsActive(key)) continue;
+        const line=document.createElement('div'); line.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:3px 2px;gap:8px';
+        const name=document.createElement('span'); name.textContent=key;
+        const remove=document.createElement('button'); remove.type='button'; remove.textContent='Remove';
+        remove.addEventListener('click',()=>{frt7SetCredential(key,false);frt7RenderCredentials();});
+        line.append(name,remove);list.appendChild(line);
+    }
+}
+settingsPanel.querySelector('#frt7-credential-add')?.addEventListener('click',()=>{
+    const input=settingsPanel.querySelector('#frt7-credential-input');
+    const ok=frt7SetCredential(input?.value,true);
+    const status=settingsPanel.querySelector('#frt7-credential-status');
+    if(status)status.textContent=ok?'Credential saved locally; Team Sync will propagate it.':'Enter a credential using letters, numbers, periods or hyphens.';
+    if(ok)input.value='';frt7RenderCredentials();
+});
+settingsPanel.querySelector('#frt7-credential-input')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();settingsPanel.querySelector('#frt7-credential-add')?.click();}});
+window.addEventListener('frt7:credentials-changed',frt7RenderCredentials);
+window.addEventListener('frt7:team-sync-data-updated',frt7RenderCredentials);
+frt7RenderCredentials();
 
 // v385: Watch persisted data while Settings is open. This catches updates
 // from direct X handlers, other toolbar callbacks, and incoming Team Sync,
@@ -15832,7 +15885,8 @@ if (pinBtn) {
         usCityDatabaseOverrides: US_CITY_DB_OVERRIDES_KEY,
         customAreaCodes: CUSTOM_AREA_CODES_KEY,
         safeFirstNames: SAFE_FIRST_NAMES_KEY,
-        macLastNameCases: FRT7_MAC_LAST_NAME_CASE_KEY
+        macLastNameCases: FRT7_MAC_LAST_NAME_CASE_KEY,
+        nameCredentials: FRT7_NAME_CREDENTIALS_KEY
     };
     const get = (k, fallback) => GM_getValue(ROOT + k, fallback);
     const set = (k, value) => GM_setValue(ROOT + k, value);
