@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.401
+// @version      9.6.402
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5294,12 +5294,18 @@ function fillNameFieldsWithLoadRetries() {
             if (!localMatch) continue;
             let local = localMatch[1].replace(/\s+/g, '');
             const domain = raw.slice(at + 1, stop).replace(/\s+/g, '');
-            // Phone digits can be directly glued to the front of a real email.
-            // Use the phone printed in the resume (not the possibly wrong site field).
-            const beforeAt = raw.slice(Math.max(0, at - 150), at);
-            const phonePrefix = local.match(/^(\d{10})([A-Z][A-Z0-9._%+-]*)$/i);
-            if (phonePrefix && isUsableTenDigitPhone(phonePrefix[1]) &&
-                beforeAt.includes(phonePrefix[1])) local = phonePrefix[2];
+            // v402: Strip a phone ONLY when it is a complete 10-digit number
+            // immediately preceding the email local part. Handles 346-285-3838,
+            // (346) 285-3838, and 6786879390 without removing email digits.
+            // The number must be visible in the resume itself.
+            const phonePrefix = local.match(/^(\(?[2-9]\d{2}\)?[-.]?[2-9]\d{2}[-.]?\d{4})([A-Z][A-Z0-9._%+-]*)$/i);
+            if (phonePrefix) {
+                const digits = phonePrefix[1].replace(/\D/g, '');
+                if (isUsableTenDigitPhone(digits)) local = phonePrefix[2];
+            }
+            // If the phone was separated by whitespace, localMatch can include
+            // both tokens. Strip the full leading phone, never partial digits.
+            local = local.replace(/^(?:\(?[2-9]\d{2}\)?[-.]?[2-9]\d{2}[-.]?\d{4})\s+(?=[a-z])/i, '');
             const candidate = `${local}@${domain}`.toLowerCase();
             if (!/^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|edu|gov)$/i.test(candidate)) continue;
             if (isObviousOcrEmailDomainIssue(candidate)) continue;
