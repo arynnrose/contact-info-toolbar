@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.410
+// @version      9.6.411
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5425,12 +5425,13 @@ function fillNameFieldsWithLoadRetries() {
             return false;
         }
 
-        // v401: boundary cleanup applies to EVERY source. FBSPL/Indeed Posting Responses/Indeed TTT special
-        // status-text handling remains source-specific.
+        // v411: whitespace-gap candidate reconstruction is strictly limited to
+        // FBSPL, Indeed Posting Responses and Indeed TTT; other sources use
+        // ordinary email extraction without joining neighboring tokens.
         // Prefer the already-correct contact email when the repaired resume
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
-        {
+        if (frt7IsFbsplSource()) {
             const broken = frt7FbsplBrokenEmail() || [];
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
