@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.397
+// @version      9.6.398
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4426,6 +4426,24 @@ function fillNameFields(options = {}) {
     );
 
     traceAuto("NORMALIZED CANDIDATE", `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)}`);
+    // v398: Do not replace a full first name with the combined initials of
+    // the existing first and last names (Domonique Williams -> DW Williams).
+    // Preserve legitimate two-letter first names unless BOTH initials match.
+    const existingFirstForInitialGuard = String(firstInput.value || "").trim();
+    const existingLastForInitialGuard = String(lastInput.value || "").trim();
+    const proposedFirstForInitialGuard = String(name.first || "").replace(/\./g, "").trim();
+    if (/^[A-Za-z]{2}$/.test(proposedFirstForInitialGuard) &&
+        existingFirstForInitialGuard.length > 2 &&
+        existingLastForInitialGuard.length > 1 &&
+        proposedFirstForInitialGuard.toUpperCase() ===
+            (existingFirstForInitialGuard[0] + existingLastForInitialGuard[0]).toUpperCase() &&
+        String(name.last || "").trim().toUpperCase() === existingLastForInitialGuard.toUpperCase()) {
+        traceAuto("BLOCK", `combined first/last initials ${JSON.stringify(name.first)} would replace full first name ${JSON.stringify(existingFirstForInitialGuard)}`);
+        console.warn(`Toolbar NAME v398: preserved ${existingFirstForInitialGuard} ${existingLastForInitialGuard}; rejected combined-initial first name ${name.first}.`);
+        if (options.auto) pendingAutoNameLearning = null;
+        return cleanedExisting;
+    }
+
     // v89 HARD SUFFIX STOP:
     // A suffix can NEVER be the Last Name by itself. The generic credential
     // stripper preserves a one-token value to avoid deleting legitimate surnames,
