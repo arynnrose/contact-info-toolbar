@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.412
+// @version      9.6.413
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -346,7 +346,7 @@ function isObviousOcrEmailDomainIssue(email) {
 function sanitizeEmail(email) {
     if (!email) return email;
 
-    let clean = String(email).trim();
+    let clean = frt7RemoveAppendedWebsite(String(email).trim());
 
     // v328: A leading hyphen can be captured from flattened resume punctuation.
     // Never allow leading hyphens in an email; preserve internal hyphens.
@@ -409,6 +409,44 @@ function sanitizeEmail(email) {
     clean = clean.replace(/\.appleid\.com.*$/i, ".appleid.com");
     return clean.toLowerCase();
 }
+
+// v413 UNIVERSAL EMAIL/WEBSITE SEPARATION (ALL SOURCES):
+// The website can be glued directly after a completed email in the site's
+// initial contact field, before Auto Email runs. Remove only an unmistakable
+// website tail, never alter the email's own .edu/.com/etc domain.
+function frt7RemoveAppendedWebsite(email) {
+    const original = String(email || "");
+    // www. is an unambiguous beginning of a separate website when it occurs
+    // immediately after a complete email TLD (including protected .edu).
+    return original.replace(/(\.(?:com|net|org|edu|gov|mil|int|info|biz|io|us|co\.uk|org\.uk))(?:\s*)(?=www\.)www\.[^\s]*/i, "$1");
+}
+(function frt7GuardEmailWebsiteTail() {
+    if (window.top !== window.self) return;
+    let busy = false;
+    function repair() {
+        if (busy) return;
+        const input = document.getElementById("txtEmail");
+        if (!input) return;
+        const before = String(input.value || "");
+        const after = frt7RemoveAppendedWebsite(before);
+        if (after === before) return;
+        busy = true;
+        try {
+            input.value = after;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            console.info(`Toolbar EMAIL v413: removed appended website from existing contact email: "${before}" -> "${after}".`);
+        } finally { busy = false; }
+    }
+    document.addEventListener("input", e => {
+        if (e.target?.id === "txtEmail") repair();
+    }, true);
+    // Also catches the site's initial value and later programmatic repaints,
+    // which do not necessarily dispatch input/change events.
+    setInterval(repair, 500);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", repair, { once: true });
+    else repair();
+})();
 
 // --- Extract from preview iframe first ---
 function getEmailFromPreview() {
