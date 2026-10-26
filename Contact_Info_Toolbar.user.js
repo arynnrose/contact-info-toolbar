@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.415
+// @version      9.6.416
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5508,28 +5508,24 @@ function fillNameFieldsWithLoadRetries() {
                 return true;
             }
         }
-        // v414: On the three conversion sources, a clearly printed complete
-        // email in the resume's CONTACT HEADER outranks a different site email.
-        // Do not reconstruct local parts or guess domains. Require exactly one
-        // distinct, complete, standalone email in the first 650 characters.
+        // v416: Narrow repair only: a standalone @yahoo.om address in the
+        // resume contact header is the known missing-c typo for @yahoo.com.
+        // Do not override contact emails for other complete header addresses.
         if (frt7IsFbsplSource()) {
             const header = String(getIframeResumeTextForRareFallback() || getResumeText() || '').slice(0, 650);
-            // v415: Some converted headers drop the c in yahoo.com -> yahoo.om.
-            // Repair ONLY the exact known provider suffix, never arbitrary .om domains.
-            const matches = [...header.matchAll(/(^|[^A-Z0-9._%+\-])([A-Z0-9._%+\-]+@(?:yahoo\.om|[A-Z0-9.-]+\.(?:com|net|org|edu|gov)))(?=$|[^A-Z0-9.-])/gi)]
-                .map(m => sanitizeEmail(m[2].replace(/@yahoo\.om$/i, '@yahoo.com')));
+            const matches = [...header.matchAll(/(^|[^A-Z0-9._%+\-])([A-Z0-9._%+\-]+@yahoo\.om)(?=$|[^A-Z0-9.-])/gi)]
+                .map(m => m[2].replace(/@yahoo\.om$/i, '@yahoo.com').toLowerCase());
             const unique = [...new Set(matches)];
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (unique.length === 1 && unique[0] !== existing &&
-                !isObviousOcrEmailDomainIssue(unique[0]) &&
                 !isManualContactLocked('email', emailInput) &&
                 !shouldBlockProtectedEmailChange(existing, unique[0])) {
                 runInternalEmailWrite(() => { emailInput.value = unique[0]; triggerEvents(emailInput); });
                 frt7FbsplEmailStatus();
-                console.info(`Toolbar EMAIL v415: one explicit header email corrected contact: "${existing}" -> "${unique[0]}".`);
+                console.info(`Toolbar EMAIL v416: corrected exact Yahoo .om header typo: "${existing}" -> "${unique[0]}".`);
                 return true;
             }
-            console.info(`Toolbar EMAIL v415: explicit header candidates=${unique.length}; no unsafe email guess.`);
+            if (unique.length) console.info(`Toolbar EMAIL v416: Yahoo .om header candidates=${unique.length}; existing email preserved.`);
         }
         if (frt7IsFbsplSource()) {
             console.warn('Toolbar EMAIL v401: no single safe FBSPL/Indeed Posting Responses/Indeed TTT email candidate; existing email preserved.');
