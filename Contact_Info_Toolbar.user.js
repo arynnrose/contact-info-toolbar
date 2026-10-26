@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.417
+// @version      9.6.418
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4601,7 +4601,9 @@ function fillNameFields(options = {}) {
                 const repairedFold = foldLetters(repairedLast);
                 const currentFold = foldLetters(currentLast);
 
-                if (continuation.length >= 2 && repairedFold.length >= 3 && repairedFold !== currentFold) {
+                // v418: A flattened email local-part can repeat the first name after a correct surname.
+                // Never append that repeated first name to the surname.
+                if (continuation.length >= 2 && foldLetters(continuation) !== foldLetters(currentFirst) && repairedFold.length >= 3 && repairedFold !== currentFold) {
                     console.info(
                         `Toolbar NAME v263: direct split Last Name repair "${currentLast} ${continuation}" -> "${repairedLast}".`
                     );
