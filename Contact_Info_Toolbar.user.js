@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.399
+// @version      9.6.400
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5279,25 +5279,33 @@ function fillNameFieldsWithLoadRetries() {
         if (!frt7IsFbsplSource()) return null;
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200)
             .replace(/[\u00a0\u2007\u202f]/g, " ");
-        // Exactly one whitespace gap, inside local part, domain or TLD.
-        const tokens = raw.match(/[A-Z0-9._%+\-@]+(?:\s+[A-Z0-9._%+\-@]+)?/ig) || [];
-        const candidates = [];
-        for (let i = 0; i < tokens.length; i++) {
-            const piece = tokens[i];
-            if (!piece.includes('@')) continue;
-            // The email can be split before or after the @-bearing token.
-            for (const sample of [piece, i ? tokens[i-1] + ' ' + piece : '', i+1 < tokens.length ? piece + ' ' + tokens[i+1] : '']) {
-                if (!sample || !/\s/.test(sample)) continue;
-                const parts = sample.trim().split(/\s+/);
-                if (parts.length !== 2) continue;
-                const joined = parts.join('');
-                if (!/^[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+$/i.test(joined)) continue;
-                if (!/\.[A-Z]{2,24}$/i.test(joined)) continue;
-                if (isObviousOcrEmailDomainIssue(joined)) continue;
-                candidates.push(joined.toLowerCase());
-            }
+        const results = new Set();
+        // Limit candidate extraction to an explicit, complete domain ending.
+        // This prevents a following applicant name being glued to .com.
+        const ending = /\.(?:com|net|org|edu|gov)/ig;
+        for (const end of raw.matchAll(ending)) {
+            const stop = end.index + end[0].length;
+            const at = raw.lastIndexOf('@', end.index);
+            if (at < 0 || stop - at > 90) continue;
+            const left = raw.slice(Math.max(0, at - 100), at);
+            // Take only the local-part run and at most one internal gap.
+            // Do not absorb a preceding standalone phone or unrelated word.
+            const localMatch = left.match(/([A-Z0-9._%+-]+(?:\s+[A-Z0-9._%+-]+)?)$/i);
+            if (!localMatch) continue;
+            let local = localMatch[1].replace(/\s+/g, '');
+            const domain = raw.slice(at + 1, stop).replace(/\s+/g, '');
+            // Phone digits can be directly glued to the front of a real email.
+            // Use the phone printed in the resume (not the possibly wrong site field).
+            const beforeAt = raw.slice(Math.max(0, at - 150), at);
+            const phonePrefix = local.match(/^(\d{10})([A-Z][A-Z0-9._%+-]*)$/i);
+            if (phonePrefix && isUsableTenDigitPhone(phonePrefix[1]) &&
+                beforeAt.includes(phonePrefix[1])) local = phonePrefix[2];
+            const candidate = `${local}@${domain}`.toLowerCase();
+            if (!/^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|edu|gov)$/i.test(candidate)) continue;
+            if (isObviousOcrEmailDomainIssue(candidate)) continue;
+            results.add(candidate);
         }
-        return [...new Set(candidates)];
+        return [...results];
     }
     function frt7FbsplEmailStatus() {
         if (!frt7IsFbsplSource()) return;
@@ -5360,6 +5368,10 @@ function fillNameFieldsWithLoadRetries() {
                 console.info(`Toolbar EMAIL v399: FBSPL repaired one-gap email: "${existing}" -> "${broken[0]}".`);
                 return true;
             }
+        }
+        if (frt7IsFbsplSource()) {
+            console.warn('Toolbar EMAIL v400: no single safe FBSPL email candidate; existing email preserved.');
+            return false;
         }
         if (!email) { console.warn("Toolbar: no email found."); return false; }
         const currentBeforeCleanup = String(emailInput.value || "").trim();
