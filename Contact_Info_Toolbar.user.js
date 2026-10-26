@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.418
+// @version      9.6.419
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -15798,6 +15798,26 @@ if (pinBtn) {
     // The single automatic Name click is issued from runAutoFixOnce() after the
     // normal applicant/page-settle gate. Nothing in this heartbeat section
     // may re-click or re-write First/Last afterward.
+
+    // v419 DISPLAY ONLY: the site's phone-status check sometimes compares the
+    // literal punctuation instead of the 10 digits. Correct a false red warning
+    // only when the current contact phone matches the resume phone exactly by digits.
+    // Never modify the phone field or override a genuine mismatch.
+    frt7SharedInterval(() => {
+        const status = document.getElementById("divCheckPhoneStatus");
+        const phone = document.getElementById("txtPhoneDataEntry") || document.getElementById("txtPhone");
+        if (!status || !phone) return;
+        const digits = String(phone.value || "").replace(/\D/g, "");
+        const raw = String(getResumeText() || "");
+        if (!raw.trim() || !isUsableTenDigitPhone(digits)) return;
+        const expected = extractPhone(raw);
+        if (!expected || digits !== String(expected).replace(/\D/g, "")) return;
+        if (/phone\s*#?\s*not found in resume/i.test(status.textContent || "")) {
+            status.textContent = "Phone # OK.";
+            status.style.color = "rgb(0, 170, 0)";
+            console.info("Toolbar PHONE v419: corrected formatting-only false red status; resume and contact phone digits match.");
+        }
+    }, 750);
 
     // AUTO PHONE v28 — authoritative new-resume reconciler.
     // Phone previously ran only as a one-shot fill. WallStJobs can repaint the old
