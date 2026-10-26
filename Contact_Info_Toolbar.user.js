@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.406
+// @version      9.6.408
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5327,7 +5327,41 @@ function fillNameFieldsWithLoadRetries() {
             // If the phone was separated by whitespace, localMatch can include
             // both tokens. Strip the full leading phone, never partial digits.
             local = local.replace(/^(?:\(?[2-9]\d{2}\)?[-.]?[2-9]\d{2}[-.]?\d{4})\s+(?=[a-z])/i, '');
-            const candidate = `${local}@${domain}`.toLowerCase();
+            // v407: A flattened phone immediately before the email may contribute
+            // its LAST seven digits (e.g. 512-3391). Remove only when verified
+            // against the applicant's complete contact phone AND resume context.
+            const contactDigits = String(document.getElementById('txtPhoneDataEntry')?.value || document.getElementById('txtPhone')?.value || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+            if (contactDigits.length === 10 && isUsableTenDigitPhone(contactDigits)) {
+                const tail7 = contactDigits.slice(3);
+                const prefix = `${tail7.slice(0,3)}-${tail7.slice(3)}`;
+                if (local.toLowerCase().startsWith(prefix.toLowerCase()) && local.length > prefix.length && /^[a-z]/i.test(local.slice(prefix.length))) {
+                    const beforeAt = raw.slice(Math.max(0, at - 120), at);
+                    if (beforeAt.includes(contactDigits.slice(0,3)) || beforeAt.includes(tail7.slice(0,3))) {
+                        console.info(`Toolbar EMAIL v407: removed verified phone tail ${prefix} from extracted email.`);
+                        local = local.slice(prefix.length);
+                    }
+                }
+            }
+            // v408: A dash used as a separator before an email is never
+            // part of the username. Preserve hyphens *inside* usernames.
+            local = local.replace(/^-+/, '');
+            // v408: Identify a phone tail from the resume itself, not solely
+            // the contact phone field (which may initially be incorrect).
+            // Example: "{954} 512-3391 Merriweatherjayla@gmail.com".
+            // Only strip when a complete phone ending with this exact tail
+            // occurs immediately before the extracted email in the header.
+            const phoneTail = local.match(/^([2-9]\d{2})[-.]([0-9]{4})([a-z][a-z0-9._%+-]*)$/i);
+            if (phoneTail) {
+                const preceding = raw.slice(Math.max(0, at - 130), at);
+                const tail = phoneTail[1] + phoneTail[2];
+                const fullPhone = new RegExp('(?:^|[^0-9])([2-9]\\d{2})[\\s{}()./-]*' + phoneTail[1] + '[\\s()./-]*' + phoneTail[2] + '(?=\\s|[A-Za-z]|$)', 'i');
+                const hit = preceding.match(fullPhone);
+                if (hit && isUsableTenDigitPhone(hit[1] + tail)) {
+                    console.info('Toolbar EMAIL v408: removed resume-verified phone tail before email.');
+                    local = phoneTail[3];
+                }
+            }
+            const candidate = sanitizeEmail(`${local}@${domain}`.toLowerCase());
             if (!/^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|edu|gov)$/i.test(candidate)) continue;
             if (isObviousOcrEmailDomainIssue(candidate)) continue;
             results.add(candidate);
@@ -10793,7 +10827,24 @@ function queueReliableAutoZipLookup(reason = "resume load") {
             // The normal recovery path retains all manual/source/header/half-address guards.
             if (!canLookup && city && !String(zipInput.value || "").trim()) {
                 console.info(`Toolbar AUTO ZIP v406: invalid city "${city}"; skipping ZIP lookup and requesting guarded Area recovery.`);
-                queueAreaRecoveryAfterZipFailure(`invalid city: ${city}`);
+                // v407: The 250ms queued recovery was continually cancelled by
+                // the 100ms Auto loop. Run the verified street-address recovery
+                // once per applicant/city, immediately, rather than rescheduling.
+                const recoveryKey = `${getApplicantLifecycleKey()}|${normalizeLocationText(city)}|${state}`;
+                if (window.__frt7_v407_street_recovery_key !== recoveryKey) {
+                    window.__frt7_v407_street_recovery_key = recoveryKey;
+                    const areaPhone = String(getAreaSourcePhone() || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+                    if (isUsableTenDigitPhone(areaPhone) && /\b(?:DRIVE|DR|STREET|ST|ROAD|RD|AVENUE|AVE|LANE|LN|BOULEVARD|BLVD|COURT|CT|WAY|PLACE|PL)\b/i.test(city)) {
+                        if (!isManualContactLocked('city', cityInput) && !isManualContactLocked('state', stateInput) &&
+                            !isManualContactLocked('zip', zipInput) && !frt7PreAutoLocationBlocksPhoneArea('v407 street recovery') &&
+                            !getAuthoritativeHeaderLocationForAuto(getResumeText())?.city) {
+                            const ok = fillLocationFromPhone(true);
+                            console.info(`Toolbar AREA v407: street-address recovery executed; success=${Boolean(ok)}; location=${cityInput.value}, ${stateInput.value}.`);
+                        } else console.info('Toolbar AREA v407: street recovery blocked by existing location/manual/header protection.');
+                    } else {
+                        queueAreaRecoveryAfterZipFailure(`invalid city: ${city}`);
+                    }
+                }
                 return;
             }
 
