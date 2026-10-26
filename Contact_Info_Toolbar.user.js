@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.398
+// @version      9.6.399
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5271,6 +5271,64 @@ function fillNameFieldsWithLoadRetries() {
         return extractEmail(getIframeResumeTextForRareFallback().slice(0, 1800));
     }
 
+    // v399 FBSPL-only PDF hyperlink gap recovery. No other source is affected.
+    function frt7IsFbsplSource() {
+        return /\bSource\s*:?\s*FBSPL\b/i.test(String(document.body?.innerText || "").replace(/\s+/g, " "));
+    }
+    function frt7FbsplBrokenEmail() {
+        if (!frt7IsFbsplSource()) return null;
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200)
+            .replace(/[\u00a0\u2007\u202f]/g, " ");
+        // Exactly one whitespace gap, inside local part, domain or TLD.
+        const tokens = raw.match(/[A-Z0-9._%+\-@]+(?:\s+[A-Z0-9._%+\-@]+)?/ig) || [];
+        const candidates = [];
+        for (let i = 0; i < tokens.length; i++) {
+            const piece = tokens[i];
+            if (!piece.includes('@')) continue;
+            // The email can be split before or after the @-bearing token.
+            for (const sample of [piece, i ? tokens[i-1] + ' ' + piece : '', i+1 < tokens.length ? piece + ' ' + tokens[i+1] : '']) {
+                if (!sample || !/\s/.test(sample)) continue;
+                const parts = sample.trim().split(/\s+/);
+                if (parts.length !== 2) continue;
+                const joined = parts.join('');
+                if (!/^[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+$/i.test(joined)) continue;
+                if (!/\.[A-Z]{2,24}$/i.test(joined)) continue;
+                if (isObviousOcrEmailDomainIssue(joined)) continue;
+                candidates.push(joined.toLowerCase());
+            }
+        }
+        return [...new Set(candidates)];
+    }
+    function frt7FbsplEmailStatus() {
+        if (!frt7IsFbsplSource()) return;
+        const input = document.getElementById('txtEmail');
+        const status = document.getElementById('divCheckEmailStatus');
+        if (!input || !status) return;
+        const current = String(input.value || '').trim().toLowerCase();
+        const candidates = frt7FbsplBrokenEmail() || [];
+        if (!candidates.includes(current)) return;
+        const message = 'Email address found in resume.';
+        if (status.textContent !== message) status.textContent = message;
+        if (status.style.color !== 'rgb(0, 170, 0)') status.style.color = 'rgb(0, 170, 0)';
+    }
+    // Observe only the existing site's status text, not the whole page.
+    let frt7FbsplStatusObserver = null;
+    function frt7FbsplWatchStatus() {
+        if (!frt7IsFbsplSource()) return;
+        const status = document.getElementById('divCheckEmailStatus');
+        if (!status || frt7FbsplStatusObserver) return;
+        frt7FbsplStatusObserver = new MutationObserver(() => frt7FbsplEmailStatus());
+        frt7FbsplStatusObserver.observe(status, { childList:true, characterData:true, subtree:true, attributes:true, attributeFilter:['style'] });
+        frt7FbsplEmailStatus();
+    }
+    setInterval(() => {
+        if (!frt7IsFbsplSource()) { frt7FbsplStatusObserver?.disconnect(); frt7FbsplStatusObserver = null; return; }
+        if (frt7FbsplStatusObserver && !document.getElementById('divCheckEmailStatus')?.isConnected) {
+            frt7FbsplStatusObserver.disconnect(); frt7FbsplStatusObserver = null;
+        }
+        frt7FbsplWatchStatus();
+    }, 800);
+
     function fillEmailField() {
         const email = frt7RemoveContactPhoneFromEmail(frt7ResumeEmailForContact());
         const emailInput = document.querySelector("#txtEmail");
@@ -5279,11 +5337,31 @@ function fillNameFieldsWithLoadRetries() {
             return false;
         }
 
-        if (!email) {
+        if (!email && !frt7IsFbsplSource()) {
             console.warn("Toolbar: no email found.");
             return false;
         }
 
+        // FBSPL ONLY: prefer the already-correct contact email when its one-gap
+        // PDF version matches; otherwise replace it only for one unambiguous
+        // broken address. Never infer from multiple different candidates.
+        if (frt7IsFbsplSource()) {
+            const broken = frt7FbsplBrokenEmail() || [];
+            const existing = String(emailInput.value || '').trim().toLowerCase();
+            if (broken.includes(existing)) {
+                frt7FbsplEmailStatus();
+                console.info(`Toolbar EMAIL v399: FBSPL one-gap email matches existing contact: "${existing}".`);
+                return true;
+            }
+            if (broken.length === 1 && !isManualContactLocked('email', emailInput) &&
+                !shouldBlockProtectedEmailChange(existing, broken[0])) {
+                runInternalEmailWrite(() => { emailInput.value = broken[0]; triggerEvents(emailInput); });
+                frt7FbsplEmailStatus();
+                console.info(`Toolbar EMAIL v399: FBSPL repaired one-gap email: "${existing}" -> "${broken[0]}".`);
+                return true;
+            }
+        }
+        if (!email) { console.warn("Toolbar: no email found."); return false; }
         const currentBeforeCleanup = String(emailInput.value || "").trim();
         const indeedRelayOverride = isIndeedEmailRelay(currentBeforeCleanup);
 
