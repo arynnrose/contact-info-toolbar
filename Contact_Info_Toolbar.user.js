@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.409
+// @version      9.6.410
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5314,6 +5314,20 @@ function fillNameFieldsWithLoadRetries() {
             const localMatch = left.match(/([A-Z0-9._%+-]+(?:\s+[A-Z0-9._%+-]+)?)$/i);
             if (!localMatch) continue;
             let local = localMatch[1].replace(/\s+/g, '');
+            // v410: A ZIP in a flattened contact header is not part of the email.
+            // Require the exact ZIP in the contact field AND an explicit whitespace
+            // boundary in the resume; never strip digits actually joined to an email.
+            const contactZip = String(document.getElementById('txtZipDataEntry')?.value || '').trim();
+            if (/^\d{5}(?:-\d{4})?$/.test(contactZip)) {
+                const zipBase = contactZip.slice(0, 5);
+                const localWithGap = localMatch[1];
+                const zipLead = new RegExp('^' + zipBase + '(?:-\\d{4})?\\s+([A-Z0-9._%+-]+)$', 'i');
+                const zipHit = localWithGap.match(zipLead);
+                if (zipHit && /^[A-Z]/i.test(zipHit[1])) {
+                    console.info(`Toolbar EMAIL v410: excluded verified contact ZIP ${zipBase} before email.`);
+                    local = zipHit[1];
+                }
+            }
             const domain = raw.slice(at + 1, stop).replace(/\s+/g, '');
             // v402: Strip a phone ONLY when it is a complete 10-digit number
             // immediately preceding the email local part. Handles 346-285-3838,
