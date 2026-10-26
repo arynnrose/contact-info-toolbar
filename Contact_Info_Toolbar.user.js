@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.400
+// @version      9.6.401
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5276,7 +5276,7 @@ function fillNameFieldsWithLoadRetries() {
         return /\bSource\s*:?\s*FBSPL\b/i.test(String(document.body?.innerText || "").replace(/\s+/g, " "));
     }
     function frt7FbsplBrokenEmail() {
-        if (!frt7IsFbsplSource()) return null;
+        // v401: safe boundary extraction applies to EVERY source.
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200)
             .replace(/[\u00a0\u2007\u202f]/g, " ");
         const results = new Set();
@@ -5350,27 +5350,29 @@ function fillNameFieldsWithLoadRetries() {
             return false;
         }
 
-        // FBSPL ONLY: prefer the already-correct contact email when its one-gap
+        // v401: boundary cleanup applies to EVERY source. FBSPL's special
+        // status-text handling remains source-specific.
+        // Prefer the already-correct contact email when the repaired resume
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
-        if (frt7IsFbsplSource()) {
+        {
             const broken = frt7FbsplBrokenEmail() || [];
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
-                console.info(`Toolbar EMAIL v399: FBSPL one-gap email matches existing contact: "${existing}".`);
+                console.info(`Toolbar EMAIL v401: recovered email matches existing contact: "${existing}".`);
                 return true;
             }
             if (broken.length === 1 && !isManualContactLocked('email', emailInput) &&
                 !shouldBlockProtectedEmailChange(existing, broken[0])) {
                 runInternalEmailWrite(() => { emailInput.value = broken[0]; triggerEvents(emailInput); });
                 frt7FbsplEmailStatus();
-                console.info(`Toolbar EMAIL v399: FBSPL repaired one-gap email: "${existing}" -> "${broken[0]}".`);
+                console.info(`Toolbar EMAIL v401: recovered email: "${existing}" -> "${broken[0]}".`);
                 return true;
             }
         }
         if (frt7IsFbsplSource()) {
-            console.warn('Toolbar EMAIL v400: no single safe FBSPL email candidate; existing email preserved.');
+            console.warn('Toolbar EMAIL v401: no single safe FBSPL email candidate; existing email preserved.');
             return false;
         }
         if (!email) { console.warn("Toolbar: no email found."); return false; }
