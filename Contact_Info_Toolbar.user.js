@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.405
+// @version      9.6.406
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -8717,6 +8717,10 @@ function isSafeAutoCity(loc) {
     if (/\b(at|for|with|remote|hybrid)\b/i.test(city)) return false;
     if (/\b(insurance|company|corporation|corp|inc|llc|hospital|university|college|school|bank|services?|solutions?|group|department|manager|director|associate|specialist|underwriter|sales|customer|employment|history|experience)\b/i.test(city)) return false;
 
+    // v406: A street address is never a city, even after the house number
+    // has been stripped by the existing City cleaner.
+    if (/\b(?:street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd\.?|court|ct\.?|circle|cir\.?|place|pl\.?|parkway|pkwy|highway|hwy|terrace|trail)\s*$/i.test(city) || /^\d{1,6}\s+/.test(city)) return false;
+
     // Real US city names are normally short. A long phrase is much more likely
     // to be a company, title, or sentence fragment captured before the state.
     const words = city.split(/\s+/).filter(Boolean);
@@ -10785,6 +10789,13 @@ function queueReliableAutoZipLookup(reason = "resume load") {
 
             const lookupSignature = `${normalizeLocationText(city)}|${state}`;
             const canLookup = city && /^[A-Z]{2}$/.test(state) && isSafeAutoCity({ city, state });
+            // v406: Don't submit an address masquerading as a city to ZIP lookup.
+            // The normal recovery path retains all manual/source/header/half-address guards.
+            if (!canLookup && city && !String(zipInput.value || "").trim()) {
+                console.info(`Toolbar AUTO ZIP v406: invalid city "${city}"; skipping ZIP lookup and requesting guarded Area recovery.`);
+                queueAreaRecoveryAfterZipFailure(`invalid city: ${city}`);
+                return;
+            }
 
             // v93 UNSAFE-CITY DEADLOCK FIX:
             // A junk/non-city value can be nonblank ("College Board", "Graduated",
@@ -11046,6 +11057,7 @@ function queueAreaRecoveryAfterZipFailure(reason = "ZIP lookup returned no ZIP")
         const lookupValue = String(lookupInput?.value || "").trim();
         console.info(`Toolbar AREA v154: auto-clicking REAL Area button after failed ZIP lookup (${reason}); current=${currentCity}, ${currentState}; lookup=${lookupValue}.`);
         areaBtn.click();
+        console.info(`Toolbar AREA v406: click dispatched; result=${String(cityInput.value || "").trim()}, ${String(stateInput.value || "").trim()}; ZIP=${String(zipInput.value || "").trim() || "blank"}.`);
 
         if (Date.now() - frt7AreaRecoveryStartedAt < 2000) {
             frt7AreaRecoveryTimer = setTimeout(attempt, 700);
