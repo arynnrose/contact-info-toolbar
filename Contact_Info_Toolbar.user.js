@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.414
+// @version      9.6.415
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5514,8 +5514,10 @@ function fillNameFieldsWithLoadRetries() {
         // distinct, complete, standalone email in the first 650 characters.
         if (frt7IsFbsplSource()) {
             const header = String(getIframeResumeTextForRareFallback() || getResumeText() || '').slice(0, 650);
-            const matches = [...header.matchAll(/(^|[^A-Z0-9._%+\-])([A-Z0-9._%+\-]+@[A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Z0-9.-])/gi)]
-                .map(m => sanitizeEmail(m[2]));
+            // v415: Some converted headers drop the c in yahoo.com -> yahoo.om.
+            // Repair ONLY the exact known provider suffix, never arbitrary .om domains.
+            const matches = [...header.matchAll(/(^|[^A-Z0-9._%+\-])([A-Z0-9._%+\-]+@(?:yahoo\.om|[A-Z0-9.-]+\.(?:com|net|org|edu|gov)))(?=$|[^A-Z0-9.-])/gi)]
+                .map(m => sanitizeEmail(m[2].replace(/@yahoo\.om$/i, '@yahoo.com')));
             const unique = [...new Set(matches)];
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (unique.length === 1 && unique[0] !== existing &&
@@ -5524,10 +5526,10 @@ function fillNameFieldsWithLoadRetries() {
                 !shouldBlockProtectedEmailChange(existing, unique[0])) {
                 runInternalEmailWrite(() => { emailInput.value = unique[0]; triggerEvents(emailInput); });
                 frt7FbsplEmailStatus();
-                console.info(`Toolbar EMAIL v414: one explicit header email corrected contact: "${existing}" -> "${unique[0]}".`);
+                console.info(`Toolbar EMAIL v415: one explicit header email corrected contact: "${existing}" -> "${unique[0]}".`);
                 return true;
             }
-            console.info(`Toolbar EMAIL v414: explicit header candidates=${unique.length}; no unsafe email guess.`);
+            console.info(`Toolbar EMAIL v415: explicit header candidates=${unique.length}; no unsafe email guess.`);
         }
         if (frt7IsFbsplSource()) {
             console.warn('Toolbar EMAIL v401: no single safe FBSPL/Indeed Posting Responses/Indeed TTT email candidate; existing email preserved.');
