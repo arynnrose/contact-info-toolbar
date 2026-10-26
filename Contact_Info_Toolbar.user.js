@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.396
+// @version      9.6.397
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -14276,6 +14276,9 @@ document.getElementById("frt7-reset-bg")
                 return;
             }
             autoRunCompleted = true;
+            // v397: Start changed-field watcher BEFORE the independent early Name pass.
+            // Otherwise early name edits become the watcher baseline and lose the yellow badge.
+            startAutoChangeSoundWatcher();
             console.info("Toolbar AUTO v351: starting independent Name readiness/settings check.");
             // Start Name before any unrelated progress/location initialization.
             // Still use the protected Name button, never a direct name-field write.
@@ -14313,9 +14316,8 @@ document.getElementById("frt7-reset-bg")
             const stateInput = document.querySelector("#txtStateDataEntry");
             const zipInput = document.querySelector("#txtZipDataEntry");
 
-            // v244: snapshot immediately before Auto begins changing fields.
-            // The watcher is short-lived and value-only, so it adds no resume parsing/polling cost.
-            startAutoChangeSoundWatcher();
+            // v397: watcher already started before the independent early Name pass.
+            // Do not restart it here: restarting clears early yellow changed badges.
 
             // v189: independent City-only cleanup for prefilled/autofilled junk.
             // This does not depend on the normal Auto City branch succeeding.
