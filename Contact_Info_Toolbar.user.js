@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.411
+// @version      9.6.412
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5294,7 +5294,25 @@ function fillNameFieldsWithLoadRetries() {
 
     // v403 PDF hyperlink gap status/repair for FBSPL, Indeed Posting Responses, and Indeed TTT.
     function frt7IsFbsplSource() {
-        return /\bSource\s*:?\s*(?:FBSPL|Indeed\s+Posting\s+Responses|Indeed\s+TTT)\b/i.test(String(document.body?.innerText || "").replace(/\s+/g, " "));
+        // v412: identify the applicant source from its labeled page metadata,
+        // including input/select values and label/value layouts. Never infer
+        // source from resume prose, or enable repair for Career Builder.
+        const allowed = /^(?:FBSPL|Indeed\s+Posting\s+Responses|Indeed\s+TTT)$/i;
+        const other = /^(?:Career\s+Builder|Resume\s+Library)$/i;
+        const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+        const body = document.body;
+        if (!body) return false;
+        const page = normalize(body.innerText || '');
+        const labelMatch = page.match(/\bSource\s*:?\s*(FBSPL|Indeed\s+Posting\s+Responses|Indeed\s+TTT|Career\s+Builder|Resume\s+Library)\b/i);
+        if (labelMatch) return allowed.test(normalize(labelMatch[1]));
+        for (const el of document.querySelectorAll('input, select, [data-source], [id*="source" i], [name*="source" i]')) {
+            const key = normalize([el.id, el.name, el.getAttribute('data-source')].join(' '));
+            if (!/source/i.test(key)) continue;
+            const value = normalize(el.tagName === 'SELECT' ? el.selectedOptions?.[0]?.textContent || el.value : el.value || el.getAttribute('data-source') || el.textContent);
+            if (allowed.test(value)) return true;
+            if (other.test(value)) return false;
+        }
+        return false;
     }
     function frt7FbsplBrokenEmail() {
         // v401: safe boundary extraction applies to EVERY source.
@@ -5389,7 +5407,12 @@ function fillNameFieldsWithLoadRetries() {
         if (!input || !status) return;
         const current = String(input.value || '').trim().toLowerCase();
         const candidates = frt7FbsplBrokenEmail() || [];
-        if (!candidates.includes(current)) return;
+        // v412: for the three approved PDF-conversion sources only, confirm an
+        // existing correct email even when the PDF inserted whitespace around @
+        // or within the address. Never turn green based on a different email.
+        const rawHeader = String(getResumeText() || getIframeResumeTextForRareFallback() || '').slice(0, 2200);
+        const compact = rawHeader.replace(/[\s\u00a0\u2007\u202f]+/g, '').toLowerCase();
+        if (!candidates.includes(current) && !(current.includes('@') && compact.includes(current))) return;
         const message = 'Email address found in resume.';
         if (status.textContent !== message) status.textContent = message;
         if (status.style.color !== 'rgb(0, 170, 0)') status.style.color = 'rgb(0, 170, 0)';
