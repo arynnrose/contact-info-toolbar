@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.416
+// @version      9.6.417
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5499,6 +5499,36 @@ function fillNameFieldsWithLoadRetries() {
                 frt7FbsplEmailStatus();
                 console.info(`Toolbar EMAIL v401: recovered email matches existing contact: "${existing}".`);
                 return true;
+            }
+            // v417: FBSPL PDF conversion may split a header email ("k aizen991")
+            // while a later resume contact block contains the complete address.
+            // If the extractor produced multiple candidates, trust ONLY a single
+            // complete, token-bounded address that is also among those candidates.
+            // This avoids joining an adjacent name/word into the local part.
+            if (broken.length > 1) {
+                const header = String(getResumeText() || getIframeResumeTextForRareFallback() || '').slice(0, 2200);
+                const complete = new Set();
+                const exactRe = /(^|[\s|;,])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[\s|;,])/gi;
+                for (const match of header.matchAll(exactRe)) {
+                    const candidate = sanitizeEmail(match[2]);
+                    if (broken.includes(candidate) && !isObviousOcrEmailDomainIssue(candidate)) complete.add(candidate);
+                }
+                if (complete.size === 1) {
+                    const confirmed = [...complete][0];
+                    if (confirmed === existing) {
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v417: verified complete resume email matches contact: "${existing}".`);
+                        return true;
+                    }
+                    if (!isManualContactLocked('email', emailInput) &&
+                        !shouldBlockProtectedEmailChange(existing, confirmed)) {
+                        runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v417: chose unique complete email over ambiguous PDF candidates: "${existing}" -> "${confirmed}".`);
+                        return true;
+                    }
+                }
+                console.info(`Toolbar EMAIL v417: ambiguous PDF candidates=${broken.length}; complete corroborated candidates=${complete.size}.`);
             }
             if (broken.length === 1 && !isManualContactLocked('email', emailInput) &&
                 !shouldBlockProtectedEmailChange(existing, broken[0])) {
