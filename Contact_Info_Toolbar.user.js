@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.402
+// @version      9.6.403
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5271,9 +5271,9 @@ function fillNameFieldsWithLoadRetries() {
         return extractEmail(getIframeResumeTextForRareFallback().slice(0, 1800));
     }
 
-    // v399 FBSPL-only PDF hyperlink gap recovery. No other source is affected.
+    // v403 PDF hyperlink gap status/repair for FBSPL and Indeed Posting Responses.
     function frt7IsFbsplSource() {
-        return /\bSource\s*:?\s*FBSPL\b/i.test(String(document.body?.innerText || "").replace(/\s+/g, " "));
+        return /\bSource\s*:?\s*(?:FBSPL|Indeed\s+Posting\s+Responses)\b/i.test(String(document.body?.innerText || "").replace(/\s+/g, " "));
     }
     function frt7FbsplBrokenEmail() {
         // v401: safe boundary extraction applies to EVERY source.
@@ -5356,7 +5356,7 @@ function fillNameFieldsWithLoadRetries() {
             return false;
         }
 
-        // v401: boundary cleanup applies to EVERY source. FBSPL's special
+        // v401: boundary cleanup applies to EVERY source. FBSPL/Indeed Posting Responses special
         // status-text handling remains source-specific.
         // Prefer the already-correct contact email when the repaired resume
         // PDF version matches; otherwise replace it only for one unambiguous
@@ -5378,7 +5378,7 @@ function fillNameFieldsWithLoadRetries() {
             }
         }
         if (frt7IsFbsplSource()) {
-            console.warn('Toolbar EMAIL v401: no single safe FBSPL email candidate; existing email preserved.');
+            console.warn('Toolbar EMAIL v401: no single safe FBSPL/Indeed Posting Responses email candidate; existing email preserved.');
             return false;
         }
         if (!email) { console.warn("Toolbar: no email found."); return false; }
