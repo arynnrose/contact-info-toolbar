@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.436
+// @version      9.6.437
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5469,6 +5469,39 @@ function fillNameFieldsWithLoadRetries() {
         }
         return false;
     }
+    // v437: Isolate the PDF-converted contact-header email field BEFORE joining
+    // any whitespace. The FBSPL template places the email after a phone/ZIP
+    // field separated by a vertical bar. This prevents unrelated header words
+    // (e.g. "Profile") from becoming part of a valid email.
+    function frt7FbsplHeaderEmail() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "")
+            .slice(0, 1200).replace(/[\u00a0\u2007\u202f]/g, " ");
+        const stop = raw.search(/\b(?:Willing to relocate|Authorized to work|Work experience|Professional summary|Professional Summary|Education|Skills)\b/i);
+        const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 400);
+        const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?:com|net|org|edu|gov)\b/i;
+        // A vertical bar marks a true field boundary in these PDF headers.
+        // Do not join across bars or across a run of 2+ spaces.
+        for (const field of header.split('|').slice(1)) {
+            if (!emailRe.test(field)) continue;
+            const chunks = field.split(/\s{2,}/).map(x => x.trim()).filter(Boolean);
+            for (const chunk of chunks) {
+                const hit = emailRe.exec(chunk);
+                if (!hit) continue;
+                const at = chunk.indexOf('@', hit.index);
+                const before = chunk.slice(0, at);
+                const local = before.match(/^\s*([A-Z0-9._%+-]+(?: [A-Z0-9._%+-]+)?)$/i);
+                if (!local) continue;
+                // Exactly one whitespace gap inside the isolated header field
+                // may be a PDF conversion artifact. A separate word before an
+                // already intact email is not proof; only join if the fragment
+                // has no ordinary word boundary outside this field.
+                const candidate = sanitizeEmail((local[1].replace(/ /g, '') + chunk.slice(at, hit.index + hit[0].length)).toLowerCase());
+                if (/^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|edu|gov)$/i.test(candidate) &&
+                    !isObviousOcrEmailDomainIssue(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
     function frt7FbsplBrokenEmail() {
         // v401: safe boundary extraction applies to EVERY source.
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200)
@@ -5615,7 +5648,8 @@ function fillNameFieldsWithLoadRetries() {
         const status = document.getElementById('divCheckEmailStatus');
         if (!input || !status) return;
         const current = String(input.value || '').trim().toLowerCase();
-        const candidates = frt7FbsplBrokenEmail() || [];
+        const headerEmail = frt7FbsplHeaderEmail();
+        const candidates = headerEmail ? [headerEmail] : (frt7FbsplBrokenEmail() || []);
         // v412: for the three approved PDF-conversion sources only, confirm an
         // existing correct email even when the PDF inserted whitespace around @
         // or within the address. Never turn green based on a different email.
@@ -5664,7 +5698,8 @@ function fillNameFieldsWithLoadRetries() {
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
-            const broken = frt7FbsplBrokenEmail() || [];
+            const headerEmail = frt7FbsplHeaderEmail();
+            const broken = headerEmail ? [headerEmail] : (frt7FbsplBrokenEmail() || []);
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
