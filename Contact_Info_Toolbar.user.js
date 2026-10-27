@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.427
+// @version      9.6.428
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17679,6 +17679,12 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
     const phoneBad = /No obvious phone #s in resume!/i;
     const zipBad = /No zips found in resume, so double check this zip\./i;
     const originalText = new WeakMap();
+    // Site validation can repaint the warning red after our initial green pass.
+    // Keep a scoped, high-priority rule for verified messages only.
+    const style = document.createElement('style');
+    style.textContent = '[data-frt428-verified="phone"], [data-frt428-verified="phone"] *,' +
+        '[data-frt428-verified="zip"], [data-frt428-verified="zip"] * { color: #008000 !important; }';
+    (document.head || document.documentElement).appendChild(style);
     let running = false;
     function update() {
         if (running) return;
@@ -17720,7 +17726,9 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
                 if (replacement !== current) n.nodeValue = replacement;
                 const parent = n.parentElement;
                 if (parent && replacement !== source) {
-                    parent.style.setProperty('color', 'green', 'important');
+                    if (phoneMatches && replacement.includes('Phone # is OK!')) parent.setAttribute('data-frt428-verified', 'phone');
+                    else if (zipMatches && replacement.includes('ZIP is OK!')) parent.setAttribute('data-frt428-verified', 'zip');
+                    parent.style.setProperty('color', '#008000', 'important');
                     // Site validation often colors the message itself or a nested span red.
                     // Style the exact text-bearing element, not unrelated sibling warnings.
                     if (parent.matches('span,div,p,b,strong,font,label')) {
@@ -17728,12 +17736,13 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
                         parent.querySelectorAll('span,b,strong,font').forEach(el => el.style.setProperty('color', '#008000', 'important'));
                     }
                 } else if (parent && originalText.has(n)) {
+                    parent.removeAttribute('data-frt428-verified');
                     parent.style.removeProperty('color');
                 }
             }
         } finally { running = false; }
     }
     // Periodic recheck also catches site-generated validation after iframe loads.
-    setInterval(update, 1200);
+    setInterval(update, 250);
     setTimeout(update, 400);
 })();
