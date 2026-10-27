@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.432
+// @version      9.6.433
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17687,6 +17687,8 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
     if (window !== window.top) return;
     const phoneBad = /No obvious phone #s in resume!/i;
     const zipBad = /No zips found in resume, so double check this zip\./i;
+    const nameBad = /(?:Last name not found in resume\.|First name not found in resume\.|Names? not found in resume\.)/i;
+    const emailBad = /Email address not found in resume\./i;
     const phoneOk = /^\s*Phone # is OK!\s*$/i;
     const zipOk = /^\s*ZIP is OK!\s*$/i;
     const originalText = new WeakMap();
@@ -17694,7 +17696,9 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
     // Keep a scoped, high-priority rule for verified messages only.
     const style = document.createElement('style');
     style.textContent = '[data-frt428-verified="phone"], [data-frt428-verified="phone"] *,' +
-        '[data-frt428-verified="zip"], [data-frt428-verified="zip"] * { color: #008000 !important; }';
+        '[data-frt428-verified="zip"], [data-frt428-verified="zip"] *,' +
+        '[data-frt428-verified="name"], [data-frt428-verified="name"] *,' +
+        '[data-frt428-verified="email"], [data-frt428-verified="email"] * { color: #008000 !important; }';
     (document.head || document.documentElement).appendChild(style);
     let running = false;
     function update() {
@@ -17718,6 +17722,13 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
                 .some(m => m[1] + m[2] + m[3] === phone);
             const zip = String(document.getElementById('txtZipDataEntry')?.value || '').trim();
             const zipMatches = /^\d{5}$/.test(zip) && new RegExp('(^|\\D)' + zip + '(?!\\d)').test(resume);
+            const first = String((document.getElementById('txtFirstNameDataEntry') || document.getElementById('txtFirstName'))?.value || '').trim();
+            const last = String((document.getElementById('txtLastNameDataEntry') || document.getElementById('txtLastName'))?.value || '').trim();
+            const escapeRegex = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const nameMatches = !!(first && last && new RegExp('(^|[^\\p{L}\\p{N}])' + escapeRegex(first) + '\\s+' + escapeRegex(last) + '(?![\\p{L}\\p{N}])', 'iu').test(resume));
+            const email = String(document.getElementById('txtEmail')?.value || '').trim();
+            const emailMatches = !!(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) &&
+                new RegExp('(^|[^a-z0-9._%+\\-])' + escapeRegex(email) + '(?![a-z0-9._%+\\-])', 'i').test(resume));
             // Only touch text nodes containing the exact site's false-negative messages.
             // Do not alter the original site validation or suppress real mismatches.
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -17725,20 +17736,24 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
             while (walker.nextNode()) {
                 const n = walker.currentNode;
                 if (n.parentElement?.closest('script,style,textarea,input,option')) continue;
-                if (phoneBad.test(n.nodeValue || '') || zipBad.test(n.nodeValue || '') || originalText.has(n) || phoneOk.test(n.nodeValue || '') || zipOk.test(n.nodeValue || '')) nodes.push(n);
+                if (phoneBad.test(n.nodeValue || '') || zipBad.test(n.nodeValue || '') || nameBad.test(n.nodeValue || '') || emailBad.test(n.nodeValue || '') || originalText.has(n) || phoneOk.test(n.nodeValue || '') || zipOk.test(n.nodeValue || '')) nodes.push(n);
             }
             for (const n of nodes) {
                 const current = n.nodeValue || '';
-                if (!originalText.has(n) && (phoneBad.test(current) || zipBad.test(current))) originalText.set(n, current);
+                if (!originalText.has(n) && (phoneBad.test(current) || zipBad.test(current) || nameBad.test(current) || emailBad.test(current))) originalText.set(n, current);
                 const source = originalText.get(n) || current;
                 let replacement = source;
                 if (phoneMatches) replacement = replacement.replace(phoneBad, 'Phone # is OK!');
                 if (zipMatches) replacement = replacement.replace(zipBad, 'ZIP is OK!');
+                if (nameMatches) replacement = replacement.replace(nameBad, 'Names are OK.');
+                if (emailMatches) replacement = replacement.replace(emailBad, 'Email address found in resume.');
                 if (replacement !== current) n.nodeValue = replacement;
                 const parent = n.parentElement;
-                if (parent && (replacement !== source || (phoneMatches && phoneOk.test(replacement)) || (zipMatches && zipOk.test(replacement)))) {
+                if (parent && (replacement !== source || (phoneMatches && phoneOk.test(replacement)) || (zipMatches && zipOk.test(replacement)) || (nameMatches && replacement.includes('Names are OK.')) || (emailMatches && replacement.includes('Email address found in resume.')))) {
                     if (phoneMatches && phoneOk.test(replacement)) parent.setAttribute('data-frt428-verified', 'phone');
                     else if (zipMatches && zipOk.test(replacement)) parent.setAttribute('data-frt428-verified', 'zip');
+                    else if (nameMatches && replacement.includes('Names are OK.')) parent.setAttribute('data-frt428-verified', 'name');
+                    else if (emailMatches && replacement.includes('Email address found in resume.')) parent.setAttribute('data-frt428-verified', 'email');
                     parent.style.setProperty('color', '#008000', 'important');
                     // Site validation often colors the message itself or a nested span red.
                     // Style the exact text-bearing element, not unrelated sibling warnings.
@@ -17768,7 +17783,7 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
         if (running) return;
         if (mutations.some(m => m.type === 'childList' ||
             (m.type === 'characterData' &&
-             (phoneBad.test(m.target.nodeValue || '') || zipBad.test(m.target.nodeValue || ''))))) schedule();
+             (phoneBad.test(m.target.nodeValue || '') || zipBad.test(m.target.nodeValue || '') || nameBad.test(m.target.nodeValue || '') || emailBad.test(m.target.nodeValue || ''))))) schedule();
     });
     observer.observe(document.body, { subtree: true, childList: true, characterData: true });
     setTimeout(update, 100);
