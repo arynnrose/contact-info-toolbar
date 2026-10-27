@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.424
+// @version      9.6.425
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4067,6 +4067,7 @@ function isAutoNameConfirmed(name) {
     const first = normalizeNameForCompare(name.first).split(" ")[0];
     const last = normalizeNameForCompare(name.last);
     if (!first || !last) return false;
+    if (name.lateVerifiedHeading) return true; // v425: independently verified, uniquely matched late heading
 
     // Section headings, job words, and resume labels can appear in large bold
     // spans and must never be treated as a person's name.
@@ -4442,11 +4443,36 @@ function fillNameFields(options = {}) {
     const currentLastIsSuffixOnly =
         NAME_SUFFIXES.has(currentLastToken) || NAME_SUFFIXES.has(currentLastNoPeriods);
 
+    // v425: Narrow misplaced-name heading recovery. Some converted resumes put
+    // CONTACT/EDUCATION/SKILLS/LANGUAGES before the actual applicant name.
+    // Only use an ALL-CAPS First [middle initial] Last heading directly before
+    // a professional subtitle / ABOUT ME, and require the existing first name
+    // to match exactly. Never infer a surname from the email or a school name.
+    const findLateApplicantHeading = () => {
+        if (!options.auto || currentLastIsSuffixOnly) return null;
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "");
+        const existingFirst = String(firstInput.value || "").trim();
+        if (!existingFirst || !raw || raw.length > 30000) return null;
+        const fold = v => normalizeUnicode(String(v)).normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const re = /\b([A-ZÀ-ÖØ-Þ]{3,})\s+([A-ZÀ-ÖØ-Þ])\.\s+([A-ZÀ-ÖØ-Þ]{3,})\s+(?=[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ\s|.]{5,85}\bABOUT\s+ME\b)/g;
+        const matches = [...raw.matchAll(re)].filter(m =>
+            fold(m[1]) === fold(existingFirst) &&
+            !NAME_STOPWORDS.has(m[3]) && !isNameCredentialToken(m[3]));
+        if (matches.length !== 1) return null;
+        const m = matches[0];
+        return { first: normalizeContactDisplayCase(m[1]),
+                 last: normalizeContactDisplayCase(m[3]),
+                 lateVerifiedHeading: true };
+    };
+    const lateVerifiedName = findLateApplicantHeading();
+    if (lateVerifiedName) console.info(`Toolbar NAME v425: verified late applicant heading -> ${lateVerifiedName.first} / ${lateVerifiedName.last}.`);
+
     const name = currentLastIsSuffixOnly
         ? (findSurnameBeforeSuffixForCurrentFirst(firstInput.value, text) ||
            findSuffixBoundaryNameFromResumeSources(text) ||
            hybridExtractName(text))
-        : hybridExtractName(text);
+        : (lateVerifiedName || hybridExtractName(text));
 
     traceAuto("DETECTED", name ? `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)} suffixRepair=${Boolean(name.suffixCurrentFieldRepair)}` : "no candidate");
 
