@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.419
+// @version      9.6.420
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -3238,6 +3238,15 @@ function findBoundedMultiTokenHeaderName(text) {
 
     if (!before) return null;
 
+    // v420: A street number between the name and a learned City/State is
+    // an address boundary, NOT part of a multi-token surname.  Example:
+    // "Paitra A. McMillion 18070 Ilene, Detroit, MI" must never yield Ilene.
+    // Reject this bounded candidate and let the ordinary header parser run.
+    if (/\b\d{1,6}\s+[A-Za-zÀ-ÖØ-öø-ÿ]/u.test(before)) {
+        console.info("Toolbar NAME v420: rejected bounded name crossing a numbered street address.");
+        return null;
+    }
+
     let tokens = before.split(/\s+/).filter(Boolean);
 
     while (tokens.length > 1 && isNameCredentialToken(tokens[0])) tokens.shift();
@@ -4440,6 +4449,31 @@ function fillNameFields(options = {}) {
         : hybridExtractName(text);
 
     traceAuto("DETECTED", name ? `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)} suffixRepair=${Boolean(name.suffixCurrentFieldRepair)}` : "no candidate");
+
+    // v420: Preserve an already-correct contact name found together at the
+    // beginning of the raw resume (allowing a middle initial).  This guard
+    // applies to ALL automatic Name paths, even early passes which intentionally
+    // use requireConfirmation=false.  Manual Name-button clicks are unaffected.
+    if (options.auto && name && !existingNameHasInvalidCharacters &&
+        rawExistingNameBeforeCleanup.first && rawExistingNameBeforeCleanup.last &&
+        !name.suffixCurrentFieldRepair) {
+        const escapeNamePart = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const currentFirst = rawExistingNameBeforeCleanup.first.trim();
+        const currentLast = rawExistingNameBeforeCleanup.last.trim();
+        const proposedFirst = String(name.first || "").trim();
+        const proposedLast = String(name.last || "").trim();
+        const rawHeader = String(document.getElementById("txtResumeRaw")?.value || getResumeText() || "").slice(0, 400);
+        const confirmedCurrent = new RegExp(
+            `^\\s*${escapeNamePart(currentFirst)}\\s+(?:[A-Za-z]\\.?\\s+)?${escapeNamePart(currentLast)}(?=\\s|[^A-Za-z]|$)`, "i"
+        ).test(rawHeader);
+        if (confirmedCurrent &&
+            (currentFirst.toLowerCase() !== proposedFirst.toLowerCase() ||
+             currentLast.toLowerCase() !== proposedLast.toLowerCase())) {
+            console.info(`Toolbar NAME v420: preserved confirmed header name "${currentFirst} ${currentLast}"; rejected candidate "${proposedFirst} ${proposedLast}".`);
+            traceAuto("BLOCK", "existing full name confirmed at start of resume header");
+            return cleanedExisting;
+        }
+    }
     if (!name) {
         console.warn("Toolbar: could not infer name.");
         return cleanedExisting;
