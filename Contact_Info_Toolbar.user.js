@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.426
+// @version      9.6.427
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -7562,7 +7562,7 @@ function fillNameFieldsWithLoadRetries() {
             const digits = `${zipPhoneMatch[1]}${zipPhoneMatch[2]}${zipPhoneMatch[3]}`;
             if (frt7IsReferencePhoneAt(header, zipPhoneMatch.index)) continue;
             if (isUsableTenDigitPhone(digits)) {
-                console.info(`Toolbar PHONE v109: recovered ZIP-glued header phone ${digits}.`);
+                // v427: This extractor is called during frequent UI refreshes. Avoid duplicate log spam.
                 return digits;
             }
         }
@@ -17721,6 +17721,12 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
                 const parent = n.parentElement;
                 if (parent && replacement !== source) {
                     parent.style.setProperty('color', 'green', 'important');
+                    // Site validation often colors the message itself or a nested span red.
+                    // Style the exact text-bearing element, not unrelated sibling warnings.
+                    if (parent.matches('span,div,p,b,strong,font,label')) {
+                        parent.style.setProperty('color', '#008000', 'important');
+                        parent.querySelectorAll('span,b,strong,font').forEach(el => el.style.setProperty('color', '#008000', 'important'));
+                    }
                 } else if (parent && originalText.has(n)) {
                     parent.style.removeProperty('color');
                 }
