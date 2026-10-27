@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.423
+// @version      9.6.424
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4773,9 +4773,23 @@ function fillNameFields(options = {}) {
             existingFirst.localeCompare(proposedLast, undefined, { sensitivity: "accent" }) === 0 &&
             existingLast.localeCompare(proposedFirst, undefined, { sensitivity: "accent" }) === 0;
 
+        // v424: Permit a two-field correction only when BOTH existing initials
+        // match the proposed full name, in the same First/Last order.
+        // Require a confirmed resume-header name; initials alone are not evidence.
+        const firstInitialOf = value => normalizeUnicode(String(value || ""))
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .match(/[A-Za-z]/)?.[0]?.toUpperCase() || "";
+        const isMatchingInitialsConfirmedName =
+            existingFirst.length > 1 && existingLast.length > 1 &&
+            proposedFirst.length > 1 && proposedLast.length > 1 &&
+            firstInitialOf(existingFirst) === firstInitialOf(proposedFirst) &&
+            firstInitialOf(existingLast) === firstInitialOf(proposedLast) &&
+            Boolean(firstInitialOf(existingFirst)) && Boolean(firstInitialOf(existingLast)) &&
+            isAutoNameConfirmed(name);
+
         // v317: Never let digits or punctuation bypass the BOTH-field guard.
         // cleanExistingNameFields() already strips digits independently.
-        if (firstWouldChange && lastWouldChange && !isExactFirstLastFlip) {
+        if (firstWouldChange && lastWouldChange && !isExactFirstLastFlip && !isMatchingInitialsConfirmedName) {
             console.warn(
                 `Toolbar NAME v317: refused replacement of BOTH name fields ` +
                 `"${existingFirst} ${existingLast}" -> "${proposedFirst} ${proposedLast}"; ` +
@@ -4783,6 +4797,10 @@ function fillNameFields(options = {}) {
             );
             pendingAutoNameLearning = null;
             return cleanedExisting;
+        }
+
+        if (firstWouldChange && lastWouldChange && isMatchingInitialsConfirmedName && !isExactFirstLastFlip) {
+            console.info(`Toolbar NAME v424: allowed confirmed matching-initials correction "${existingFirst} ${existingLast}" -> "${proposedFirst} ${proposedLast}".`);
         }
 
         if (firstWouldChange && lastWouldChange && isExactFirstLastFlip) {
