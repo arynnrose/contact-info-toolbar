@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.429
+// @version      9.6.430
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17677,6 +17677,8 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
     if (window !== window.top) return;
     const phoneBad = /No obvious phone #s in resume!/i;
     const zipBad = /No zips found in resume, so double check this zip\./i;
+    const phoneOk = /^\s*Phone # is OK!\s*$/i;
+    const zipOk = /^\s*ZIP is OK!\s*$/i;
     const originalText = new WeakMap();
     // Site validation can repaint the warning red after our initial green pass.
     // Keep a scoped, high-priority rule for verified messages only.
@@ -17713,7 +17715,7 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
             while (walker.nextNode()) {
                 const n = walker.currentNode;
                 if (n.parentElement?.closest('script,style,textarea,input,option')) continue;
-                if (phoneBad.test(n.nodeValue || '') || zipBad.test(n.nodeValue || '') || originalText.has(n)) nodes.push(n);
+                if (phoneBad.test(n.nodeValue || '') || zipBad.test(n.nodeValue || '') || originalText.has(n) || phoneOk.test(n.nodeValue || '') || zipOk.test(n.nodeValue || '')) nodes.push(n);
             }
             for (const n of nodes) {
                 const current = n.nodeValue || '';
@@ -17724,9 +17726,9 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
                 if (zipMatches) replacement = replacement.replace(zipBad, 'ZIP is OK!');
                 if (replacement !== current) n.nodeValue = replacement;
                 const parent = n.parentElement;
-                if (parent && replacement !== source) {
-                    if (phoneMatches && replacement.includes('Phone # is OK!')) parent.setAttribute('data-frt428-verified', 'phone');
-                    else if (zipMatches && replacement.includes('ZIP is OK!')) parent.setAttribute('data-frt428-verified', 'zip');
+                if (parent && (replacement !== source || (phoneMatches && phoneOk.test(replacement)) || (zipMatches && zipOk.test(replacement)))) {
+                    if (phoneMatches && phoneOk.test(replacement)) parent.setAttribute('data-frt428-verified', 'phone');
+                    else if (zipMatches && zipOk.test(replacement)) parent.setAttribute('data-frt428-verified', 'zip');
                     parent.style.setProperty('color', '#008000', 'important');
                     // Site validation often colors the message itself or a nested span red.
                     // Style the exact text-bearing element, not unrelated sibling warnings.
