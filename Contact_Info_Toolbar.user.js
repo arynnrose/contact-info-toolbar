@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.420
+// @version      9.6.421
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -8997,6 +8997,26 @@ function findExplicitLocationInLiteralRawContact() {
     const raw = String(document.getElementById("txtResumeRaw")?.value || "").trim();
     if (!raw) return null;
 
+    // v421: Recover an exact learned City, ST from the TRUE contact header
+    // BEFORE the broad parser can reject glued phone/city/state/email text.
+    // Keep the match before section headings to avoid work/education locations.
+    const sectionEnd = findTrueResumeSectionStop(raw);
+    const contactHeader = raw.slice(0, Math.min(900, sectionEnd >= 0 ? sectionEnd : 900));
+    if (learnedCitiesLoaded) {
+        const matches = Object.values(learnedCitiesCache || {})
+            .filter(e => e && e.deleted !== true && e.trustedManualCity !== false && e.city && e.state)
+            .sort((a, b) => b.city.length - a.city.length);
+        for (const e of matches) {
+            const pattern = String(e.city).replace(/^St\.?(?=\s)/i, "St").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+                .replace(/^St(?=\s)/i, "St\\.?").replace(/\s+/g, "\\s+");
+            const re = new RegExp("(" + pattern + ")\\s*,\\s*" + String(e.state).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
+            if (re.test(contactHeader) && !learnedCityCollidesWithApplicantLastName(e.city)) {
+                console.info(`Toolbar CITY v421: recovered exact learned header suffix -> ${e.city}, ${e.state}.`);
+                return { city: normalizeContactDisplayCase(e.city), state: e.state, trusted: true, withState: true, literalRawContact: true };
+            }
+        }
+
+    }
     const parsed = extractCityStateFromHeader(raw);
     if (!parsed?.city || !parsed?.state || !isSafeAutoCity(parsed)) return null;
 
