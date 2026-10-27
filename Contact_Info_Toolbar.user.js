@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.425
+// @version      9.6.426
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17669,3 +17669,65 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
         });
     }
 }
+
+
+// v426: Display-only verification for resumes whose raw textarea is empty/tiny.
+// The site's own validation reads txtResumeRaw and can falsely report no phone/ZIP
+// even though the same-origin Word preview contains both. Never change contact fields.
+(function frt426IframeValidationDisplay() {
+    if (window !== window.top) return;
+    const phoneBad = /No obvious phone #s in resume!/i;
+    const zipBad = /No zips found in resume, so double check this zip\./i;
+    const originalText = new WeakMap();
+    let running = false;
+    function update() {
+        if (running) return;
+        running = true;
+        try {
+            const raw = String(document.getElementById('txtResumeRaw')?.value || '').trim();
+            if (raw.length >= 100) return;
+            const frame = document.querySelector('iframe[src*="displayresumetext.asp"]') ||
+                          document.querySelector('#divResumeContainer iframe');
+            let doc;
+            try { doc = frame?.contentDocument || frame?.contentWindow?.document; } catch (_) {}
+            const resume = String(doc?.querySelector('.Section1')?.innerText ||
+                                  doc?.body?.innerText || doc?.body?.textContent || '')
+                .replace(/[\u00a0\u2007\u202f]/g, ' ');
+            if (resume.length < 150) return;
+            const phoneInput = document.getElementById('txtPhoneDataEntry') || document.getElementById('txtPhone');
+            let phone = String(phoneInput?.value || '').replace(/\D/g, '');
+            if (phone.length === 11 && phone[0] === '1') phone = phone.slice(1);
+            const phoneMatches = phone.length === 10 && [...resume.matchAll(/(?:^|\D)(?:\+?1[\s().-]*)?(\d{3})[\s().-]*(\d{3})[\s().-]*(\d{4})(?!\d)/g)]
+                .some(m => m[1] + m[2] + m[3] === phone);
+            const zip = String(document.getElementById('txtZipDataEntry')?.value || '').trim();
+            const zipMatches = /^\d{5}$/.test(zip) && new RegExp('(^|\\D)' + zip + '(?!\\d)').test(resume);
+            // Only touch text nodes containing the exact site's false-negative messages.
+            // Do not alter the original site validation or suppress real mismatches.
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            while (walker.nextNode()) {
+                const n = walker.currentNode;
+                if (n.parentElement?.closest('script,style,textarea,input,option')) continue;
+                if (phoneBad.test(n.nodeValue || '') || zipBad.test(n.nodeValue || '') || originalText.has(n)) nodes.push(n);
+            }
+            for (const n of nodes) {
+                const current = n.nodeValue || '';
+                if (!originalText.has(n) && (phoneBad.test(current) || zipBad.test(current))) originalText.set(n, current);
+                const source = originalText.get(n) || current;
+                let replacement = source;
+                if (phoneMatches) replacement = replacement.replace(phoneBad, 'Phone # is OK!');
+                if (zipMatches) replacement = replacement.replace(zipBad, 'ZIP is OK!');
+                if (replacement !== current) n.nodeValue = replacement;
+                const parent = n.parentElement;
+                if (parent && replacement !== source) {
+                    parent.style.setProperty('color', 'green', 'important');
+                } else if (parent && originalText.has(n)) {
+                    parent.style.removeProperty('color');
+                }
+            }
+        } finally { running = false; }
+    }
+    // Periodic recheck also catches site-generated validation after iframe loads.
+    setInterval(update, 1200);
+    setTimeout(update, 400);
+})();
