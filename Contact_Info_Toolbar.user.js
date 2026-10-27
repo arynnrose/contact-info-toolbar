@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.422
+// @version      9.6.423
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5418,6 +5418,37 @@ function fillNameFieldsWithLoadRetries() {
                 if (zipHit && /^[A-Z]/i.test(zipHit[1])) {
                     console.info(`Toolbar EMAIL v410: excluded verified contact ZIP ${zipBase} before email.`);
                     local = zipHit[1];
+                }
+            }
+            // v423: Remove a state+ZIP accidentally glued to the email username.
+            // Require the exact contact state and ZIP and the matching state/ZIP
+            // sequence immediately before the username in the resume. Never
+            // strip a bare ZIP or state without this combined proof.
+            const contactState = String(document.getElementById('txtStateDataEntry')?.value || '').trim().toUpperCase();
+            const contactZip5 = String(document.getElementById('txtZipDataEntry')?.value || '').trim().match(/^(\d{5})(?:-\d{4})?$/)?.[1] || '';
+            if (/^[A-Z]{2}$/.test(contactState) && contactZip5 && Object.values(STATE_MAP).includes(contactState)) {
+                const gluedPrefix = contactState + contactZip5;
+                if (local.toUpperCase().startsWith(gluedPrefix) &&
+                    /^[A-Za-z][A-Za-z0-9._%+-]*$/.test(local.slice(gluedPrefix.length))) {
+                    const sourceBeforeAt = raw.slice(Math.max(0, at - 120), at);
+                    const escapedState = contactState;
+                    const escapedZip = contactZip5;
+                    const locationTail = new RegExp('(?:,\\s*' + escapedState + '\\s*' + escapedZip + '|\\b' + escapedState + '\\s+' + escapedZip + ')', 'i');
+                    if (locationTail.test(sourceBeforeAt)) {
+                        local = local.slice(gluedPrefix.length);
+                        console.info(`Toolbar EMAIL v423: removed verified state+ZIP ${gluedPrefix} from email username.`);
+                    }
+                }
+            }
+            // Also handle "Omaha, NE 68116luz@...": the whitespace before
+            // ZIP means the state is outside the captured email local-part.
+            if (contactZip5 && contactState && local.startsWith(contactZip5) &&
+                /^[A-Za-z][A-Za-z0-9._%+-]*$/.test(local.slice(5))) {
+                const localStart = at - localMatch[1].length;
+                const preceding = raw.slice(Math.max(0, localStart - 35), localStart);
+                if (new RegExp('(?:,\\s*|\\b)' + contactState + '\\s+$', 'i').test(preceding)) {
+                    local = local.slice(5);
+                    console.info(`Toolbar EMAIL v423: removed verified ZIP ${contactZip5} following state ${contactState}.`);
                 }
             }
             const domain = raw.slice(at + 1, stop).replace(/\s+/g, '');
