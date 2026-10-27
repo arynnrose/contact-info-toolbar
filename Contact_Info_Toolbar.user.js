@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.440
+// @version      9.6.441
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5548,6 +5548,36 @@ function fillNameFieldsWithLoadRetries() {
         }
         return [...found];
     }
+    // v441: Name-anchored repair of ONE internal space in an unstructured
+    // contact header. Unlike the old recovery, this never prepends an arbitrary
+    // word to a complete email. Require a long fragment beginning with the
+    // applicant's first name AND continuing into a surname, plus an email
+    // immediately after a SINGLE space. Never cross two spaces or a section.
+    function frt7FbsplNameAnchoredGapEmail() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '')
+            .slice(0, 650).replace(/[\u00a0\u2007\u202f]/g, ' ');
+        const stop = raw.search(/\b(?:Willing to relocate|Work authorization|Work experience|Professional summary|Education|Skills|Areas of expertise)\b/i);
+        const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 350);
+        const nameMatch = header.match(/^\s*([A-Za-z][A-Za-z'’-]+)\s+([A-Za-z][A-Za-z'’-]+)(?:\s+([A-Za-z][A-Za-z'’-]+))?/);
+        if (!nameMatch) return null;
+        const first = nameMatch[1].toLowerCase().replace(/[^a-z]/g, '');
+        const surnames = [nameMatch[2], nameMatch[3]].filter(Boolean)
+            .map(v => v.toLowerCase().replace(/[^a-z]/g, ''));
+        const found = new Set();
+        const re = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]{5,}) ([A-Z0-9._%+\-]+)@([A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Z0-9.-])/gi;
+        for (const match of header.matchAll(re)) {
+            const left = match[2].toLowerCase();
+            const right = match[3].toLowerCase();
+            // Prefix must include the full first name and at least two letters
+            // from a surname; this excludes 'Yale C-JServices' and 'Profile jvelas2'.
+            if (!left.startsWith(first) || left.length < first.length + 2) continue;
+            const tail = left.slice(first.length);
+            if (!surnames.some(s => s.startsWith(tail) && tail.length >= 2)) continue;
+            const candidate = sanitizeEmail(left + right + '@' + match[4]);
+            if (!isObviousOcrEmailDomainIssue(candidate)) found.add(candidate);
+        }
+        return found.size === 1 ? [...found][0] : null;
+    }
     function frt7FbsplUnstructuredIntactEmails() {
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200);
         const found = new Set();
@@ -5756,7 +5786,8 @@ function fillNameFieldsWithLoadRetries() {
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
             const headerEmail = frt7FbsplHeaderEmail();
-            const broken = headerEmail ? [headerEmail] : frt7FbsplUnstructuredIntactEmails();
+            const nameAnchored = headerEmail ? null : frt7FbsplNameAnchoredGapEmail();
+            const broken = headerEmail ? [headerEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
