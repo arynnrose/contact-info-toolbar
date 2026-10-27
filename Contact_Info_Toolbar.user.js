@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.433
+// @version      9.6.434
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4684,6 +4684,33 @@ function fillNameFields(options = {}) {
         }
     }
 
+    // v434: Exception for a site surname made by concatenating 3+ distinct
+    // header tokens (Erik / Bryanherreramartinez vs Erik Bryan Herrera Martinez).
+    // Require a clean explicit heading AND the exact raw-header token sequence;
+    // ordinary two-part/compound surnames keep their existing protections.
+    const frt7V434ConcatenatedHeader = (() => {
+        if (!options.auto) return false;
+        const fold = v => normalizeUnicode(String(v || "")).normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z]/g, "").toLowerCase();
+        const first = fold(firstInput.value), oldLast = fold(lastInput.value);
+        const candidateFirst = fold(name.first), candidateLast = fold(name.last);
+        if (!first || first !== candidateFirst || !oldLast || oldLast === candidateLast) return false;
+        const explicit = getExplicitResumeNameHeading();
+        if (!explicit || fold(explicit.first) !== first || fold(explicit.last) !== candidateLast) return false;
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "").trim();
+        const tokens = (raw.slice(0, 220).match(/^[A-Za-zÀ-ÖØ-öø-ÿ'’.-]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ'’.-]+){3,}/) || [""])[0]
+            .split(/\s+/).filter(Boolean);
+        if (tokens.length < 4 || fold(tokens[0]) !== first) return false;
+        for (let count = 3; count <= Math.min(5, tokens.length - 1); count++) {
+            const parts = tokens.slice(1, count + 1);
+            if (fold(parts.join("")) === oldLast && fold(parts[parts.length - 1]) === candidateLast) {
+                console.info(`Toolbar NAME v434: confirmed concatenated site surname from ${count} header tokens; allowing last name "${name.last}".`);
+                return true;
+            }
+        }
+        return false;
+    })();
+
     // v261 SPLIT LAST-NAME GUARD:
     // Flattened resume text can insert whitespace INSIDE a surname, e.g.
     //   "Stephanie Fi    elds"  -> detector may see Last="Fi"
@@ -4745,7 +4772,7 @@ function fillNameFields(options = {}) {
                 if (splitSurnameConfirmed) break;
             }
 
-            if (splitSurnameConfirmed) {
+            if (splitSurnameConfirmed && !frt7V434ConcatenatedHeader) {
                 traceAuto("GUARD", "v261 split-surname preservation");
                 console.info(
                     `Toolbar NAME v261: preserved existing Last Name "${existingLastForSplitGuard}" ` +
@@ -4775,7 +4802,8 @@ function fillNameFields(options = {}) {
         if (foldAutoSurname(existingFirst) === foldAutoSurname(proposedFirst) &&
             currentFold.length >= 3 && proposedFold.length >= 1 &&
             proposedFold.length < currentFold.length &&
-            (currentFold.startsWith(proposedFold) || currentFold.endsWith(proposedFold))) {
+            (currentFold.startsWith(proposedFold) || currentFold.endsWith(proposedFold)) &&
+            !frt7V434ConcatenatedHeader) {
             console.info(`Toolbar NAME v355: existing v265 surname truncation protection applied to primary Auto path; preserved "${existingLast}" instead of "${proposedLast}" (raw resume may be empty; iframe name may be split).`);
             traceAuto("BLOCK", "v355 prefix/suffix truncation protection");
             pendingAutoNameLearning = null;
