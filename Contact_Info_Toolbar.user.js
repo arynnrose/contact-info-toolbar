@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.437
+// @version      9.6.438
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4442,6 +4442,31 @@ function fillNameFields(options = {}) {
 
     const text = getResumeText();
 
+    // v438 EXACT HEADER FLIP: only swap two already-present names when the
+    // beginning of the raw resume explicitly contains them in reverse order.
+    // Do not infer a new name or use a job title as a surname.
+    if (options.auto && !existingNameHasInvalidCharacters &&
+        rawExistingNameBeforeCleanup.first && rawExistingNameBeforeCleanup.last) {
+        const escapePart = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const a = rawExistingNameBeforeCleanup.first;
+        const b = rawExistingNameBeforeCleanup.last;
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "");
+        const exactFlip = new RegExp(`^\\s*${escapePart(b)}\\s+${escapePart(a)}(?=\\s|[^A-Za-z]|$)`, "i").test(raw.slice(0, 400));
+        if (exactFlip && a.toLowerCase() !== b.toLowerCase()) {
+            const swapped = { first: normalizeContactDisplayCase(b), last: applyLearnedMacLastNameCase(a) };
+            if (!isRejectedAutoName(swapped)) {
+                firstInput.value = swapped.first;
+                triggerEvents(firstInput);
+                lastInput.value = swapped.last;
+                triggerEvents(lastInput);
+                window.__frt7_last_auto_name = { ...swapped };
+                console.info(`Toolbar NAME v438: exact raw-header flip confirmed -> ${swapped.first} / ${swapped.last}.`);
+                showNameChangedToast();
+                return true;
+            }
+        }
+    }
+
     // v92 TRANSACTIONAL SUFFIX OVERRIDE:
     // If the site's current Last Name is itself only a generational suffix, give
     // the dedicated raw+rendered suffix detector first chance to repair it. This
@@ -4948,6 +4973,12 @@ function scheduleRenderedNameRefinement() {
         }
 
         if (!renderedName?.first || !renderedName?.last) return false;
+        // v438: delayed iframe writes must obey the same rejected-name rules
+        // as the main Name button. This prevents blocked job-title surnames.
+        if (isRejectedAutoName(renderedName)) {
+            console.info("Toolbar NAME v438: blocked rejected delayed iframe candidate.");
+            return true;
+        }
         if (!isAutoNameConfirmed(renderedName)) return true;
 
         const currentFirst = String(firstInput.value || "").trim();
