@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.421
+// @version      9.6.422
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -9002,6 +9002,15 @@ function findExplicitLocationInLiteralRawContact() {
     // Keep the match before section headings to avoid work/education locations.
     const sectionEnd = findTrueResumeSectionStop(raw);
     const contactHeader = raw.slice(0, Math.min(900, sectionEnd >= 0 ? sectionEnd : 900));
+    // v422: The resume converter can glue the state abbreviation directly to
+    // the verified contact email, e.g. Arlington, TXgilkey.kelvin20@gmail.com.
+    // The old \b after TX rejects this because g is also a word character.
+    // Only permit this boundary when the complete current contact email follows.
+    const contactEmail = String(document.getElementById("txtEmail")?.value || "").trim();
+    const escapedContactEmail = contactEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const stateEndBoundary = contactEmail.includes("@")
+        ? "(?:\\b|(?=" + escapedContactEmail + "))"
+        : "\\b";
     if (learnedCitiesLoaded) {
         const matches = Object.values(learnedCitiesCache || {})
             .filter(e => e && e.deleted !== true && e.trustedManualCity !== false && e.city && e.state)
@@ -9009,7 +9018,7 @@ function findExplicitLocationInLiteralRawContact() {
         for (const e of matches) {
             const pattern = String(e.city).replace(/^St\.?(?=\s)/i, "St").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
                 .replace(/^St(?=\s)/i, "St\\.?").replace(/\s+/g, "\\s+");
-            const re = new RegExp("(" + pattern + ")\\s*,\\s*" + String(e.state).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
+            const re = new RegExp("(" + pattern + ")\\s*,\\s*" + String(e.state).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + stateEndBoundary, "i");
             if (re.test(contactHeader) && !learnedCityCollidesWithApplicantLastName(e.city)) {
                 console.info(`Toolbar CITY v421: recovered exact learned header suffix -> ${e.city}, ${e.state}.`);
                 return { city: normalizeContactDisplayCase(e.city), state: e.state, trusted: true, withState: true, literalRawContact: true };
@@ -9041,7 +9050,7 @@ function findExplicitLocationInLiteralRawContact() {
         for (const e of matches) {
             const pattern = String(e.city).replace(/^St\.?(?=\s)/i, "St").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
                 .replace(/^St(?=\s)/i, "St\\.?").replace(/\s+/g, "\\s+");
-            const re = new RegExp("(" + pattern + ")\\s*,\\s*" + String(e.state).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
+            const re = new RegExp("(" + pattern + ")\\s*,\\s*" + String(e.state).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + stateEndBoundary, "i");
             if (re.test(headerPrefix) && !learnedCityCollidesWithApplicantLastName(e.city)) {
                 console.info(`Toolbar CITY v330: recovered exact learned header suffix -> ${e.city}, ${e.state}.`);
                 return { city: normalizeContactDisplayCase(e.city), state: e.state, trusted: true, withState: true, literalRawContact: true };
