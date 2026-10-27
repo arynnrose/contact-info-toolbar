@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.441
+// @version      9.6.442
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5578,6 +5578,30 @@ function fillNameFieldsWithLoadRetries() {
         }
         return found.size === 1 ? [...found][0] : null;
     }
+    // v442: Exact-contact corroboration for ONE conversion gap in the contact
+    // header. This is a confirmation, not permission to join arbitrary words:
+    // never cross 2+ spaces, never use a full name token as the prefix, and
+    // require the joined result to equal the complete existing contact email.
+    function frt7FbsplContactConfirmedGapEmail(existingEmail) {
+        const existing = sanitizeEmail(String(existingEmail || '').trim());
+        if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.(?:com|net|org|edu|gov)$/i.test(existing) ||
+            isObviousOcrEmailDomainIssue(existing)) return null;
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '')
+            .slice(0, 650).replace(/[\u00a0\u2007\u202f]/g, ' ');
+        const stop = raw.search(/\b(?:Willing to relocate|Work authorization|Work experience|Professional summary|Education|Skills|Areas of expertise)\b/i);
+        const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 350);
+        const name = header.match(/^\s*([A-Za-z][A-Za-z'’-]+)\s+([A-Za-z][A-Za-z'’-]+)(?:\s+([A-Za-z][A-Za-z'’-]+))?/);
+        if (!name) return null;
+        const nameWords = new Set(name.slice(1).filter(Boolean).map(x => x.toLowerCase()));
+        const pattern = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]{2,}) ([A-Z0-9._%+\-]+)@([A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Z0-9.-])/gi;
+        for (const hit of header.matchAll(pattern)) {
+            const left = hit[2].toLowerCase();
+            if (nameWords.has(left) || /^\d{5}(?:-\d{4})?$/.test(left)) continue;
+            const candidate = sanitizeEmail(hit[2] + hit[3] + '@' + hit[4]);
+            if (candidate === existing) return existing;
+        }
+        return null;
+    }
     function frt7FbsplUnstructuredIntactEmails() {
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200);
         const found = new Set();
@@ -5786,6 +5810,13 @@ function fillNameFieldsWithLoadRetries() {
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
             const headerEmail = frt7FbsplHeaderEmail();
+            const existingForGap = String(emailInput.value || '').trim().toLowerCase();
+            const contactConfirmed = headerEmail ? null : frt7FbsplContactConfirmedGapEmail(existingForGap);
+            if (contactConfirmed) {
+                frt7FbsplEmailStatus();
+                console.info(`Toolbar EMAIL v442: single header gap exactly matches existing contact email: "${contactConfirmed}"; preserved.`);
+                return true;
+            }
             const nameAnchored = headerEmail ? null : frt7FbsplNameAnchoredGapEmail();
             const broken = headerEmail ? [headerEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
             const existing = String(emailInput.value || '').trim().toLowerCase();
