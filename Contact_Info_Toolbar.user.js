@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.428
+// @version      9.6.429
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6273,13 +6273,12 @@ function fillNameFieldsWithLoadRetries() {
                 .trim()
         );
 
-        // v270 CANONICAL ST. LOUIS PUNCTUATION:
-        // The City character-clean intentionally strips punctuation, which turns
-        // "St. Louis" into "St Louis". Restore the canonical period narrowly
-        // after that cleanup without changing punctuation handling for other cities.
-        if (/^St\s+Louis$/i.test(cleanedCity)) {
-            cleanedCity = "St. Louis";
-        }
+        // v429: Preserve standard city-name abbreviation periods after character cleanup.
+        // The earlier letters-only sanitizer stripped "St." every time, causing the
+        // trusted header restoration and the city cleaner to fight each other.
+        // Only restore periods for recognized standalone abbreviations, not arbitrary dots.
+        cleanedCity = cleanedCity.replace(/\b(St|Mt|Ft|Ste)\s+(?=[A-Za-zÀ-ÖØ-öø-ÿ])/gi,
+            (_, abbr) => ({st:'St.', mt:'Mt.', ft:'Ft.', ste:'Ste.'})[abbr.toLowerCase()] + ' ');
 
         if (cleanedCity && cleanedCity !== currentCity) {
             try {
