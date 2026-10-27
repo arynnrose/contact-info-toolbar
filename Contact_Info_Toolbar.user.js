@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.438
+// @version      9.6.439
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5533,6 +5533,20 @@ function fillNameFieldsWithLoadRetries() {
         }
         return null;
     }
+    // v439: When no pipe-delimited email field exists, NEVER join separate
+    // whitespace tokens. Accept only an intact, token-bounded resume email.
+    // This protects "Julie Yale    C-JServices@Juno.com" from becoming
+    // "yalec-jservices@juno.com" via the legacy v401 fallback.
+    function frt7FbsplUnstructuredIntactEmails() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200);
+        const found = new Set();
+        const re = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]+@[A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Z0-9.-])/gi;
+        for (const match of raw.matchAll(re)) {
+            const candidate = sanitizeEmail(match[2]);
+            if (!isObviousOcrEmailDomainIssue(candidate)) found.add(candidate);
+        }
+        return [...found];
+    }
     function frt7FbsplBrokenEmail() {
         // v401: safe boundary extraction applies to EVERY source.
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200)
@@ -5680,7 +5694,7 @@ function fillNameFieldsWithLoadRetries() {
         if (!input || !status) return;
         const current = String(input.value || '').trim().toLowerCase();
         const headerEmail = frt7FbsplHeaderEmail();
-        const candidates = headerEmail ? [headerEmail] : (frt7FbsplBrokenEmail() || []);
+        const candidates = headerEmail ? [headerEmail] : frt7FbsplUnstructuredIntactEmails();
         // v412: for the three approved PDF-conversion sources only, confirm an
         // existing correct email even when the PDF inserted whitespace around @
         // or within the address. Never turn green based on a different email.
@@ -5730,7 +5744,7 @@ function fillNameFieldsWithLoadRetries() {
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
             const headerEmail = frt7FbsplHeaderEmail();
-            const broken = headerEmail ? [headerEmail] : (frt7FbsplBrokenEmail() || []);
+            const broken = headerEmail ? [headerEmail] : frt7FbsplUnstructuredIntactEmails();
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
