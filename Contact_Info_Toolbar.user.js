@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.439
+// @version      9.6.440
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5537,6 +5537,17 @@ function fillNameFieldsWithLoadRetries() {
     // whitespace tokens. Accept only an intact, token-bounded resume email.
     // This protects "Julie Yale    C-JServices@Juno.com" from becoming
     // "yalec-jservices@juno.com" via the legacy v401 fallback.
+    // v440: Exact, token-bounded known-provider .comm typo in the resume header.
+    // Never use partial .com matching, whitespace joining, or unknown domains.
+    function frt7KnownCommHeaderEmails() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '').slice(0, 650);
+        const found = new Set();
+        const re = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]+)@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud|appleid)\.comm(?=$|[^A-Z0-9.-])/gi;
+        for (const match of raw.matchAll(re)) {
+            found.add((match[2] + '@' + match[3] + '.com').toLowerCase());
+        }
+        return [...found];
+    }
     function frt7FbsplUnstructuredIntactEmails() {
         const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || "").slice(0, 2200);
         const found = new Set();
@@ -5695,6 +5706,7 @@ function fillNameFieldsWithLoadRetries() {
         const current = String(input.value || '').trim().toLowerCase();
         const headerEmail = frt7FbsplHeaderEmail();
         const candidates = headerEmail ? [headerEmail] : frt7FbsplUnstructuredIntactEmails();
+        candidates.push(...frt7KnownCommHeaderEmails());
         // v412: for the three approved PDF-conversion sources only, confirm an
         // existing correct email even when the PDF inserted whitespace around @
         // or within the address. Never turn green based on a different email.
@@ -5786,6 +5798,20 @@ function fillNameFieldsWithLoadRetries() {
                 runInternalEmailWrite(() => { emailInput.value = broken[0]; triggerEvents(emailInput); });
                 frt7FbsplEmailStatus();
                 console.info(`Toolbar EMAIL v401: recovered email: "${existing}" -> "${broken[0]}".`);
+                return true;
+            }
+        }
+        // v440: Correct only an isolated known-provider .comm typo in the header.
+        // A single unique candidate is required; preserve manual edits and protections.
+        if (frt7IsFbsplSource()) {
+            const corrected = frt7KnownCommHeaderEmails();
+            const existing = String(emailInput.value || '').trim().toLowerCase();
+            if (corrected.length === 1 && corrected[0] !== existing &&
+                !isManualContactLocked('email', emailInput) &&
+                !shouldBlockProtectedEmailChange(existing, corrected[0])) {
+                runInternalEmailWrite(() => { emailInput.value = corrected[0]; triggerEvents(emailInput); });
+                frt7FbsplEmailStatus();
+                console.info(`Toolbar EMAIL v440: corrected known-provider .comm header typo: "${existing}" -> "${corrected[0]}".`);
                 return true;
             }
         }
