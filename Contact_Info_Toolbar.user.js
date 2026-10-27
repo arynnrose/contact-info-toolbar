@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.431
+// @version      9.6.432
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -129,8 +129,17 @@ function toProper(word) {
 //   DE LA CRUZ -> De La Cruz
 //   O'CONNOR -> O'Connor
 //   MCALLEN -> McAllen
+// v432: PDF/Word ligatures are single Unicode characters, not ordinary letters.
+// Expand only typographic Latin ligatures before city parsing and ZIP lookup.
+function frt7ExpandLatinLigatures(value) {
+    return String(value || "").replace(/[ﬀ-ﬆ]/g, ch => ({
+        "ﬀ":"ff", "ﬁ":"fi", "ﬂ":"fl", "ﬃ":"ffi",
+        "ﬄ":"ffl", "ﬅ":"st", "ﬆ":"st"
+    })[ch] || ch);
+}
+
 function normalizeContactDisplayCase(value) {
-    return String(value || "")
+    return frt7ExpandLatinLigatures(value)
         .trim()
         .replace(/\s+/g, " ")
         .split(" ")
@@ -214,7 +223,7 @@ function triggerEvents(el) {
 }
 
 function normalizeUnicode(str) {
-    return str
+    return frt7ExpandLatinLigatures(str)
         .normalize("NFC")      // keep accented characters intact
         .replace(/\u200B/g, ""); // remove zero-width junk if present
 }
@@ -9972,7 +9981,7 @@ function frt7PreAutoLocationBlocksPhoneArea(reason = "Area") {
 }
 
 function normalizeLocationText(value) {
-    return String(value || "")
+    return frt7ExpandLatinLigatures(value)
         .toUpperCase()
         .replace(/[^A-Z0-9]+/g, " ")
         .trim()
@@ -10390,6 +10399,7 @@ function frt7ApplyQueensZipV319(city, state, reason = "trusted Queens") {
 function runConfirmedZipLookup(loc, options = {}) {
     if (!loc || !loc.city || !/^[A-Z]{2}$/.test(loc.state || "")) return false;
 
+    loc = { ...loc, city: normalizeContactDisplayCase(loc.city) };
     if (frt7ApplyQueensZipV319(loc.city, loc.state, "confirmed ZIP repair")) return true;
 
     // v158: Never use City/State ZIP lookup when the true header already provides
@@ -10450,7 +10460,7 @@ function runConfirmedZipLookup(loc, options = {}) {
         return true;
     }
 
-    lookupInput.value = `${loc.city}, ${loc.state}`;
+    lookupInput.value = `${normalizeContactDisplayCase(loc.city)}, ${loc.state}`;
     fireZipLookupEnter(lookupInput);
     console.log("Toolbar AUTO ZIP LOOKUP:", lookupInput.value,
         allowMismatchCorrection ? "(confirmed website mismatch)" : "(blank ZIP)");
