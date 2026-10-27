@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.434
+// @version      9.6.435
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5577,6 +5577,29 @@ function fillNameFieldsWithLoadRetries() {
                 if (hit && isUsableTenDigitPhone(hit[1] + tail)) {
                     console.info('Toolbar EMAIL v408: removed resume-verified phone tail before email.');
                     local = phoneTail[3];
+                }
+            }
+            // v435: A PDF conversion can glue only the final four phone digits
+            // to the following email (903-504-9010moms@... -> 9010moms@...).
+            // Strip them ONLY with independent proof: the applicant's contact
+            // phone matches a complete phone printed directly before the email
+            // in the resume. Never strip numeric email prefixes on a mere match.
+            if (contactDigits.length === 10 && isUsableTenDigitPhone(contactDigits)) {
+                const last4 = contactDigits.slice(-4);
+                if (local.startsWith(last4) && /^[A-Za-z][A-Za-z0-9._%+-]*$/.test(local.slice(4))) {
+                    const localStart = at - localMatch[1].length;
+                    const nearby = raw.slice(Math.max(0, localStart - 100), localStart);
+                    const phoneRe = new RegExp('(?:^|[^0-9])' + contactDigits.slice(0,3) +
+                        '[\\s()./-]*' + contactDigits.slice(3,6) + '[\\s()./-]*' +
+                        last4 + '[\\s()./-]*$', 'i');
+                    // A complete preceding phone with the final four digits
+                    // already included in the local match is also valid proof.
+                    const prefixRe = new RegExp('(?:^|[^0-9])' + contactDigits.slice(0,3) +
+                        '[\\s()./-]*' + contactDigits.slice(3,6) + '[\\s()./-]*$');
+                    if (phoneRe.test(nearby) || prefixRe.test(nearby)) {
+                        console.info('Toolbar EMAIL v435: removed resume-verified final four phone digits from email.');
+                        local = local.slice(4);
+                    }
                 }
             }
             const candidate = sanitizeEmail(`${local}@${domain}`.toLowerCase());
