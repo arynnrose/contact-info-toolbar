@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.430
+// @version      9.6.431
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17743,7 +17743,25 @@ function fillLocationFromPhone(allowHalfAddressOverride = false) {
             }
         } finally { running = false; }
     }
-    // Periodic recheck also catches site-generated validation after iframe loads.
-    setInterval(update, 250);
-    setTimeout(update, 400);
+    // v431: React to actual site changes rather than repainting every 250ms.
+    // The previous polling caused visible color oscillation when site validation
+    // and our verification happened at different points in the timer cycle.
+    let queued = false;
+    const schedule = () => {
+        if (queued) return;
+        queued = true;
+        queueMicrotask(() => { queued = false; update(); });
+    };
+    const observer = new MutationObserver(mutations => {
+        // Ignore changes to our own verification attributes/style/text; only
+        // site changes to validation content need another pass.
+        if (running) return;
+        if (mutations.some(m => m.type === 'childList' ||
+            (m.type === 'characterData' &&
+             (phoneBad.test(m.target.nodeValue || '') || zipBad.test(m.target.nodeValue || ''))))) schedule();
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    setTimeout(update, 100);
+    setTimeout(update, 500);
+    setTimeout(update, 1200);
 })();
