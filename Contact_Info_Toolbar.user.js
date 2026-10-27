@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.432
+// @version      9.6.433
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5458,7 +5458,21 @@ function fillNameFieldsWithLoadRetries() {
             // Do not absorb a preceding standalone phone or unrelated word.
             const localMatch = left.match(/([A-Z0-9._%+-]+(?:\s+[A-Z0-9._%+-]+)?)$/i);
             if (!localMatch) continue;
-            let local = localMatch[1].replace(/\s+/g, '');
+            // v433: A complete email token wins over speculative joining of a
+            // preceding word. Only reconstruct a gap when the standalone local
+            // token is not already a complete, bounded email in the resume.
+            // Example: "Benefits Management Profile    jvelas2@yahoo.com"
+            // must never become "profilejvelas2@yahoo.com".
+            const localTokens = localMatch[1].trim().split(/\s+/);
+            const standaloneLocal = localTokens[localTokens.length - 1];
+            const standaloneStart = at - standaloneLocal.length;
+            const standaloneDomain = raw.slice(at + 1, stop);
+            const boundedRight = stop >= raw.length || !/[A-Za-z0-9._%+-]/.test(raw[stop]);
+            const boundedLeft = standaloneStart === 0 || !/[A-Za-z0-9._%+-]/.test(raw[standaloneStart - 1]);
+            const standaloneComplete = boundedLeft && boundedRight &&
+                /^[A-Za-z0-9._%+-]+$/.test(standaloneLocal) &&
+                /^[A-Za-z0-9.-]+\.(?:com|net|org|edu|gov)$/i.test(standaloneDomain);
+            let local = (standaloneComplete ? standaloneLocal : localMatch[1].replace(/\s+/g, ''));
             // v410: A ZIP in a flattened contact header is not part of the email.
             // Require the exact ZIP in the contact field AND an explicit whitespace
             // boundary in the resume; never strip digits actually joined to an email.
