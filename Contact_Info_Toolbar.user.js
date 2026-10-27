@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.435
+// @version      9.6.436
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -9130,6 +9130,27 @@ function findExplicitRemoteHybridHeaderCity(text) {
 function findExplicitLocationInLiteralRawContact() {
     const raw = String(document.getElementById("txtResumeRaw")?.value || "").trim();
     if (!raw) return null;
+
+    // v436: Preserve an already-correct contact City/State/ZIP when the exact
+    // same complete address appears in the actual resume contact header.
+    // This handles "Atlanta Ga. 30349" without weakening the street-suffix
+    // guard for ambiguous "Bloomfield Ct" addresses. Require the ZIP too,
+    // so employer cities later in Experience cannot override the contact.
+    const currentCity = String(document.getElementById("txtCityDataEntry")?.value || "").trim();
+    const currentState = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+    const currentZip = String(document.getElementById("txtZipDataEntry")?.value || "").trim();
+    const trueHeaderEnd = findTrueResumeSectionStop(raw);
+    const trueContactHeader = raw.slice(0, Math.min(900, trueHeaderEnd >= 0 ? trueHeaderEnd : 900));
+    if (currentCity && /^[A-Z]{2}$/.test(currentState) && /^\d{5}(?:-\d{4})?$/.test(currentZip)) {
+        const cityPattern = currentCity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+        const statePattern = currentState.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const zipPattern = currentZip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const exactAddress = new RegExp("(^|[^A-Za-z])(" + cityPattern + ")\\s*,?\\s*(" + statePattern + ")\\.?\\s+(" + zipPattern + ")(?!\\d)", "i");
+        if (exactAddress.test(trueContactHeader) && !learnedCityCollidesWithApplicantLastName(currentCity)) {
+            console.info(`Toolbar CITY v436: preserved exact contact header City/State/ZIP -> ${currentCity}, ${currentState} ${currentZip}.`);
+            return { city: normalizeContactDisplayCase(currentCity), state: currentState, zip: currentZip, trusted: true, withState: true, literalRawContact: true, explicitHeaderPair: true };
+        }
+    }
 
     // v421: Recover an exact learned City, ST from the TRUE contact header
     // BEFORE the broad parser can reject glued phone/city/state/email text.
