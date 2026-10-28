@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.443
+// @version      9.6.444
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5601,6 +5601,30 @@ function fillNameFieldsWithLoadRetries() {
     // header. This is a confirmation, not permission to join arbitrary words:
     // never cross 2+ spaces, never use a full name token as the prefix, and
     // require the joined result to equal the complete existing contact email.
+    // v444: Join a single space only when the fragment immediately before an
+    // otherwise valid email completes the applicant's EXACT first/last name
+    // together with the beginning of the email local part. Never prepend a
+    // separate full name (John john45@...) or cross a double-space boundary.
+    function frt7FbsplSplitNameEmail() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '')
+            .slice(0, 900).replace(/[\u00a0\u2007\u202f]/g, ' ');
+        const stop = raw.search(/\b(?:Willing to relocate|Work authorization|Work experience|Professional summary|Education|Skills|Areas of expertise)\b/i);
+        const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 450);
+        const first = String(document.getElementById('txtFirstNameDataEntry')?.value || document.getElementById('txtFirstName')?.value || '').trim().toLowerCase();
+        const last = String(document.getElementById('txtLastNameDataEntry')?.value || document.getElementById('txtLastName')?.value || '').trim().toLowerCase();
+        const names = [first, last].filter(n => /^[a-z]{3,}$/.test(n));
+        const found = new Set();
+        const re = /(^|[^A-Z0-9._%+\-@])([A-Z]{2,}) ([A-Z0-9._%+\-]+)@([A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Z0-9.-])/gi;
+        for (const hit of header.matchAll(re)) {
+            const left = hit[2].toLowerCase();
+            const right = hit[3].toLowerCase();
+            // The gap must be WITHIN the name, not after a whole name.
+            if (!names.some(name => left.length < name.length && name.startsWith(left) && right.startsWith(name.slice(left.length)))) continue;
+            const candidate = sanitizeEmail(hit[2] + hit[3] + '@' + hit[4]);
+            if (!isObviousOcrEmailDomainIssue(candidate)) found.add(candidate);
+        }
+        return found.size === 1 ? [...found][0] : null;
+    }
     function frt7FbsplContactConfirmedGapEmail(existingEmail) {
         const existing = sanitizeEmail(String(existingEmail || '').trim());
         if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.(?:com|net|org|edu|gov)$/i.test(existing) ||
@@ -5837,8 +5861,9 @@ function fillNameFieldsWithLoadRetries() {
                 return true;
             }
             const domainGap = headerEmail ? null : frt7FbsplKnownDomainGapEmail();
-            const nameAnchored = (headerEmail || domainGap) ? null : frt7FbsplNameAnchoredGapEmail();
-            const broken = headerEmail ? [headerEmail] : domainGap ? [domainGap] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
+            const splitNameEmail = (headerEmail || domainGap) ? null : frt7FbsplSplitNameEmail();
+            const nameAnchored = (headerEmail || domainGap || splitNameEmail) ? null : frt7FbsplNameAnchoredGapEmail();
+            const broken = headerEmail ? [headerEmail] : domainGap ? [domainGap] : splitNameEmail ? [splitNameEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
