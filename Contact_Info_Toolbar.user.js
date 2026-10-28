@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.452
+// @version      9.6.453
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10171,25 +10171,28 @@ function frt7ExplicitHeaderZipCorrection() {
 
 // v452: hand the verified header result to the actual Auto writer, not just the lock.
 function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
-    if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
-    if (!allowCity) return false;
-    if (typeof frt7HumanTouchedLocation === "function" && frt7HumanTouchedLocation()) return false;
     const loc = frt7ExplicitHeaderZipCorrection();
     if (!loc) return false;
+    const sourceOK = frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource();
     const cityEl = document.getElementById("txtCityDataEntry");
     const stateEl = document.getElementById("txtStateDataEntry");
     const zipEl = document.getElementById("txtZipDataEntry");
-    if (!cityEl || !stateEl || !zipEl) return false;
-    if (isManualContactLocked("city", cityEl) || isManualContactLocked("state", stateEl) ||
-        isManualContactLocked("zip", zipEl)) return false;
-    if (String(zipEl.value || "").trim() !== loc.zip) return false;
-    if (String(stateEl.value || "").trim().toUpperCase() !== loc.state) return false;
-    const before = normalizeContactDisplayCase(cityEl.value);
-    if (before.toLowerCase() === loc.city.toLowerCase()) return false;
-    // Only change the city: the existing state and ZIP are already confirmed.
+    const before = normalizeContactDisplayCase(String(cityEl?.value || ""));
+    if (before.toLowerCase() === loc.city.toLowerCase()) return true;
+    const touched = frt7HumanTouchedLocation();
+    const cityLocked = cityEl ? isManualContactLocked("city", cityEl) : true;
+    const stateLocked = stateEl ? isManualContactLocked("state", stateEl) : true;
+    const zipLocked = zipEl ? isManualContactLocked("zip", zipEl) : true;
+    const zipMatches = String(zipEl?.value || "").trim() === loc.zip;
+    const stateMatches = String(stateEl?.value || "").trim().toUpperCase() === loc.state;
+    if (!sourceOK || !allowCity || touched || cityLocked || stateLocked || zipLocked ||
+        !cityEl || !stateEl || !zipEl || !zipMatches || !stateMatches) {
+        console.warn(`Toolbar CITY v453: verified ${loc.city}, ${loc.state} ${loc.zip} but write blocked: source=${sourceOK}, allowCity=${Boolean(allowCity)}, touched=${touched}, locks=${cityLocked}/${stateLocked}/${zipLocked}, stateMatches=${stateMatches}, zipMatches=${zipMatches}, fields=${Boolean(cityEl)}/${Boolean(stateEl)}/${Boolean(zipEl)}.`);
+        return false;
+    }
     cityEl.value = loc.city;
     triggerEvents(cityEl);
-    console.info(`Toolbar CITY v452: verified header correction ${before}, ${loc.state} ${loc.zip} -> ${loc.city}, ${loc.state} ${loc.zip}; preserved ZIP.`);
+    console.info(`Toolbar CITY v453: verified header correction ${before}, ${loc.state} ${loc.zip} -> ${loc.city}, ${loc.state} ${loc.zip}; preserved ZIP.`);
     return true;
 }
 
