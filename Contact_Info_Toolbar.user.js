@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.450
+// @version      9.6.451
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10143,13 +10143,12 @@ function frt7ExplicitHeaderZipCorrection() {
     try {
         const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim().slice(0, 5);
         if (!/^\d{5}$/.test(zip)) return null;
-        const text = String(getResumeText() || "");
-        const stop = findTrueResumeSectionStop(text.slice(0, 1800));
-        const header = text.slice(0, stop >= 0 ? Math.min(stop, 900) : 900);
-        // v450: Use the same database predicate as the existing header parser.
-        // v449 mistakenly called nonexistent matchers and compared a ZIP-state
-        // string against an object, so its exception never succeeded.
-        const re = /\b([A-Za-z][A-Za-z.'’ -]{1,55}?)\s*,\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/gi;
+        const raw = String(getResumeText() || "");
+        const stop = findTrueResumeSectionStop(raw.slice(0, 1800));
+        const header = raw.slice(0, stop >= 0 ? Math.min(stop, 900) : 900);
+        // v451: flattened resumes can have VA22030 with NO separating space.
+        // Match the city immediately before the comma, not the entire preceding name.
+        const re = /([A-Za-z][A-Za-z.'’ -]{0,55}?),\s*([A-Z]{2})\s*(\d{5})(?:-\d{4})?\b/gi;
         let m;
         while ((m = re.exec(header))) {
             if (m[3] !== zip) continue;
@@ -10159,12 +10158,13 @@ function frt7ExplicitHeaderZipCorrection() {
             for (let n = Math.min(4, words.length); n >= 1; n--) {
                 const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
                 if (isUsCityDatabasePair(city, state)) {
-                    console.info(`Toolbar CITY v450: exact header city/state/ZIP verified -> ${city}, ${state} ${zip}.`);
+                    console.info(`Toolbar CITY v451: verified exact header ${city}, ${state} ${zip}; bypass source lock.`);
                     return {city, state, zip};
                 }
             }
         }
-    } catch (e) { console.warn("Toolbar CITY v450: header ZIP validation failed", e); }
+        console.info(`Toolbar CITY v451: no verified header city/state/ZIP matching existing ZIP ${zip}.`);
+    } catch (e) { console.warn("Toolbar CITY v451: header ZIP validation failed", e); }
     return null;
 }
 
@@ -10175,7 +10175,7 @@ function frt7SourceProtectionAllowed() {
         const currentCity = normalizeContactDisplayCase(String(document.getElementById("txtCityDataEntry")?.value || "").trim());
         const currentState = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
         if (currentCity.toLowerCase() !== explicitZipHeader.city.toLowerCase() || currentState !== explicitZipHeader.state) {
-            console.info(`Toolbar CITY v449: source lock bypassed for verified header ${explicitZipHeader.city}, ${explicitZipHeader.state} ${explicitZipHeader.zip}.`);
+            console.info(`Toolbar CITY v451: source lock bypassed for verified header ${explicitZipHeader.city}, ${explicitZipHeader.state} ${explicitZipHeader.zip}.`);
             return false;
         }
     }
