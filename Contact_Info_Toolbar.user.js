@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.446
+// @version      9.6.447
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6776,7 +6776,7 @@ function fillNameFieldsWithLoadRetries() {
             ];
             for (const loc of headerCandidates) {
                 const state = String(loc?.state || "").trim().toUpperCase();
-                const city = normalizeContactDisplayCase(String(loc?.city || "").trim());
+                const city = normalizeContactDisplayCase(String(loc?.city || "").trim().replace(/[,;]+\s*$/, ""));
                 if (city && state === currentState && containsWholeCity(city)) {
                     canonicalCity = city;
                     break;
@@ -7382,7 +7382,7 @@ function fillNameFieldsWithLoadRetries() {
         if (!cityInput || !stateInput) return false;
         if (isManualContactLocked("city", cityInput) || isManualContactLocked("state", stateInput)) return false;
 
-        const wantedCity = normalizeContactDisplayCase(lock.city);
+        const wantedCity = normalizeContactDisplayCase(String(lock.city || "").replace(/[,;]+\s*$/, ""));
         const wantedState = String(lock.state || "").trim().toUpperCase();
         const currentCity = normalizeContactDisplayCase(String(cityInput.value || "").trim());
         const currentState = String(stateInput.value || "").trim().toUpperCase();
@@ -8942,6 +8942,9 @@ function findTrustedLearnedCityInHeader(text) {
     );
     filteredPool.sort((a,b) => a.index - b.index || b.city.length - a.city.length);
     const winner = filteredPool[0];
+    // v447: Punctuation between City and State belongs to the separator,
+    // never to the City. Keep the candidate and its offset otherwise intact.
+    winner.city = String(winner.city || "").trim().replace(/[,;]+\s*$/, "").trim();
     console.info(
         `Toolbar CITY v153: trusted header city "${winner.city}"` +
         `${winner.state ? ", " + winner.state : ""} selected at header index ${winner.index}.`
@@ -9813,8 +9816,8 @@ function fillCityOnlyFromResume(options = {}) {
         return false;
     }
 
-    const normalized = normalizeContactDisplayCase(loc.city);
-    const originalCity = normalizeContactDisplayCase(cityInput.value);
+    const normalized = normalizeContactDisplayCase(String(loc.city || "").replace(/[,;]+\s*$/, ""));
+    const originalCity = normalizeContactDisplayCase(String(cityInput.value || "").replace(/[,;]+\s*$/, ""));
     const cityActuallyChanged = originalCity !== normalized;
     let changed = false;
 
@@ -9918,6 +9921,17 @@ function fillCityOnlyFromResume(options = {}) {
                 changed = true;
                 queueVerifiedHeaderCityZipEnforcerV172(loc, "trusted City/State sync");
             } else if (cityActuallyChanged || stateActuallyChanged) {
+                // v447: A punctuation-only city correction is NOT a move.
+                // If the existing ZIP is consistent with the trusted state,
+                // retain it rather than launching a lookup that can return
+                // an unrelated ZIP. Genuine city/state moves still use v309.
+                const priorCity = normalizeContactDisplayCase(String(cityInput.value || "").replace(/[,;]+\s*$/, ""));
+                const currentZip = String(zipInput.value || "").trim();
+                const zipState = /^\d{5}$/.test(currentZip) ? frt7StateFromZipV171(currentZip) : "";
+                if (!cityActuallyChanged && !stateActuallyChanged && currentZip && (!zipState || zipState === trustedState)) {
+                    console.info(`Toolbar CITY v447: retained existing ZIP ${currentZip} for unchanged ${normalized}, ${trustedState}.`);
+                    return changed;
+                }
                 // v309: A ZIP matching only the STATE is not sufficient when the
                 // trusted header changes the CITY. Without an explicit header ZIP,
                 // discard the old city's ZIP and use the existing city/state lookup.
