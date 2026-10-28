@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.453
+// @version      9.6.454
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10185,14 +10185,24 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
     const zipLocked = zipEl ? isManualContactLocked("zip", zipEl) : true;
     const zipMatches = String(zipEl?.value || "").trim() === loc.zip;
     const stateMatches = String(stateEl?.value || "").trim().toUpperCase() === loc.state;
-    if (!sourceOK || !allowCity || touched || cityLocked || stateLocked || zipLocked ||
+    // v454: The state/ZIP-only Auto pass explicitly supplies city:false even
+    // when the user's actual Auto City setting is ON. That internal flag must
+    // not veto an independently verified City, ST ZIP correction. Still honor
+    // the user's real City setting and every manual-edit/location guard.
+    let citySettingEnabled = false;
+    try {
+        const storedFields = GM_getValue(AUTO_FIELDS_KEY, {});
+        const parsedFields = typeof storedFields === "string" ? JSON.parse(storedFields || "{}") : storedFields;
+        citySettingEnabled = parsedFields?.city !== false;
+    } catch (_) { citySettingEnabled = false; }
+    if (!sourceOK || !citySettingEnabled || touched || cityLocked || stateLocked || zipLocked ||
         !cityEl || !stateEl || !zipEl || !zipMatches || !stateMatches) {
-        console.warn(`Toolbar CITY v453: verified ${loc.city}, ${loc.state} ${loc.zip} but write blocked: source=${sourceOK}, allowCity=${Boolean(allowCity)}, touched=${touched}, locks=${cityLocked}/${stateLocked}/${zipLocked}, stateMatches=${stateMatches}, zipMatches=${zipMatches}, fields=${Boolean(cityEl)}/${Boolean(stateEl)}/${Boolean(zipEl)}.`);
+        console.warn(`Toolbar CITY v454: verified ${loc.city}, ${loc.state} ${loc.zip} but write blocked: source=${sourceOK}, citySetting=${citySettingEnabled}, internalAllowCity=${Boolean(allowCity)}, touched=${touched}, locks=${cityLocked}/${stateLocked}/${zipLocked}, stateMatches=${stateMatches}, zipMatches=${zipMatches}, fields=${Boolean(cityEl)}/${Boolean(stateEl)}/${Boolean(zipEl)}.`);
         return false;
     }
     cityEl.value = loc.city;
     triggerEvents(cityEl);
-    console.info(`Toolbar CITY v453: verified header correction ${before}, ${loc.state} ${loc.zip} -> ${loc.city}, ${loc.state} ${loc.zip}; preserved ZIP.`);
+    console.info(`Toolbar CITY v454: verified header correction ${before}, ${loc.state} ${loc.zip} -> ${loc.city}, ${loc.state} ${loc.zip}; preserved ZIP (internalAllowCity=${Boolean(allowCity)}).`);
     return true;
 }
 
