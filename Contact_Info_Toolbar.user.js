@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.451
+// @version      9.6.452
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -9682,6 +9682,7 @@ function frt7FormattedIframeContactCityV312() {
 }
 
 function fillCityOnlyFromResume(options = {}) {
+    if (options?.trustedOnly && !options?.manualButton && frt7ApplyVerifiedHeaderZipCorrection(true, true)) return true;
     if (options?.trustedOnly && !options?.manualButton) {
         const coverLetterApplicant = frt7CoverLetterExistingLocationCandidate();
         if (coverLetterApplicant) {
@@ -10166,6 +10167,30 @@ function frt7ExplicitHeaderZipCorrection() {
         console.info(`Toolbar CITY v451: no verified header city/state/ZIP matching existing ZIP ${zip}.`);
     } catch (e) { console.warn("Toolbar CITY v451: header ZIP validation failed", e); }
     return null;
+}
+
+// v452: hand the verified header result to the actual Auto writer, not just the lock.
+function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
+    if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
+    if (!allowCity) return false;
+    if (typeof frt7HumanTouchedLocation === "function" && frt7HumanTouchedLocation()) return false;
+    const loc = frt7ExplicitHeaderZipCorrection();
+    if (!loc) return false;
+    const cityEl = document.getElementById("txtCityDataEntry");
+    const stateEl = document.getElementById("txtStateDataEntry");
+    const zipEl = document.getElementById("txtZipDataEntry");
+    if (!cityEl || !stateEl || !zipEl) return false;
+    if (isManualContactLocked("city", cityEl) || isManualContactLocked("state", stateEl) ||
+        isManualContactLocked("zip", zipEl)) return false;
+    if (String(zipEl.value || "").trim() !== loc.zip) return false;
+    if (String(stateEl.value || "").trim().toUpperCase() !== loc.state) return false;
+    const before = normalizeContactDisplayCase(cityEl.value);
+    if (before.toLowerCase() === loc.city.toLowerCase()) return false;
+    // Only change the city: the existing state and ZIP are already confirmed.
+    cityEl.value = loc.city;
+    triggerEvents(cityEl);
+    console.info(`Toolbar CITY v452: verified header correction ${before}, ${loc.state} ${loc.zip} -> ${loc.city}, ${loc.state} ${loc.zip}; preserved ZIP.`);
+    return true;
 }
 
 function frt7SourceProtectionAllowed() {
@@ -11804,6 +11829,7 @@ function fillAutoCityStateFromResume(fields = {}) {
     const wantsState = Boolean(fields.state);
     const wantsZipLookup = Boolean(fields.zipLookup);
     if (!wantsCity && !wantsState && !wantsZipLookup) return false;
+    if (frt7ApplyVerifiedHeaderZipCorrection(wantsCity, wantsState)) return true;
 
     // v313 EMPTY-RAW IFRAME CONTACT HEADER: exceptionally, WallStJobs leaves
     // txtResumeRaw empty while the same-origin preview contains the actual resume.
