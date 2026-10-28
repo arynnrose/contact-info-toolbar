@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.449
+// @version      9.6.450
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10141,30 +10141,30 @@ function frt7TrustedHeaderPairBypassesSourceProtection() {
 // the resume and require the existing ZIP verbatim; never infer from prose.
 function frt7ExplicitHeaderZipCorrection() {
     try {
-        const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim().slice(0,5);
+        const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim().slice(0, 5);
         if (!/^\d{5}$/.test(zip)) return null;
-        const header = String(getResumeText() || "").slice(0, 450);
-        const escapedZip = zip;
-        const re = new RegExp("\\b([A-Za-z][A-Za-z.'’ -]{1,45}?),\\s*([A-Z]{2})\\s+" + escapedZip + "\\b", "gi");
-        let match;
-        while ((match = re.exec(header))) {
-            const state = match[2].toUpperCase();
-            if (String(frt7StateFromZipV171(zip) || "").toUpperCase() !== state) continue;
-            // The city may be preceded by a person's name. Test trailing
-            // 1-4 word suffixes, preferring a known database/learned city.
-            const words = match[1].trim().split(/\s+/);
+        const text = String(getResumeText() || "");
+        const stop = findTrueResumeSectionStop(text.slice(0, 1800));
+        const header = text.slice(0, stop >= 0 ? Math.min(stop, 900) : 900);
+        // v450: Use the same database predicate as the existing header parser.
+        // v449 mistakenly called nonexistent matchers and compared a ZIP-state
+        // string against an object, so its exception never succeeded.
+        const re = /\b([A-Za-z][A-Za-z.'’ -]{1,55}?)\s*,\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/gi;
+        let m;
+        while ((m = re.exec(header))) {
+            if (m[3] !== zip) continue;
+            const state = m[2].toUpperCase();
+            if (frt7StateFromZipV171(zip) !== state) continue;
+            const words = m[1].trim().split(/\s+/);
             for (let n = Math.min(4, words.length); n >= 1; n--) {
                 const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
-                const known = (typeof findTrustedLearnedCityInHeader === "function" &&
-                    findTrustedLearnedCityInHeader(city + ", " + state)) ||
-                    (typeof findUsCityDatabaseInHeader === "function" &&
-                    findUsCityDatabaseInHeader(city + ", " + state));
-                if (known && String(known.city || "").toLowerCase() === city.toLowerCase() &&
-                    String(known.state || "").toUpperCase() === state)
+                if (isUsCityDatabasePair(city, state)) {
+                    console.info(`Toolbar CITY v450: exact header city/state/ZIP verified -> ${city}, ${state} ${zip}.`);
                     return {city, state, zip};
+                }
             }
         }
-    } catch (e) { console.warn("Toolbar CITY v449: header ZIP validation failed", e); }
+    } catch (e) { console.warn("Toolbar CITY v450: header ZIP validation failed", e); }
     return null;
 }
 
