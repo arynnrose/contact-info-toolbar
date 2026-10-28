@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.444
+// @version      9.6.445
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5897,6 +5897,26 @@ function fillNameFieldsWithLoadRetries() {
                         console.info(`Toolbar EMAIL v417: chose unique complete email over ambiguous PDF candidates: "${existing}" -> "${confirmed}".`);
                         return true;
                     }
+                }
+                // v445: When multiple intact, independently bounded emails occur in
+                // the actual contact header, choose the first in document order.
+                // Do not reconstruct or concatenate neighboring words here.
+                const headerStop = header.search(/\b(?:Willing to relocate|Authorized to work|Work experience|Professional summary|Education|Skills)\b/i);
+                const contactHeader = headerStop >= 0 ? header.slice(0, headerStop) : header.slice(0, 400);
+                const firstHeaderEmailRe = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]+@[A-Z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Z0-9.-])/gi;
+                for (const match of contactHeader.matchAll(firstHeaderEmailRe)) {
+                    const first = sanitizeEmail(match[2]);
+                    if (!broken.includes(first) || isObviousOcrEmailDomainIssue(first)) continue;
+                    if (first === existing) {
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v445: first intact contact-header email already matches: "${first}".`);
+                        return true;
+                    }
+                    if (isManualContactLocked('email', emailInput) || shouldBlockProtectedEmailChange(existing, first)) break;
+                    runInternalEmailWrite(() => { emailInput.value = first; triggerEvents(emailInput); });
+                    frt7FbsplEmailStatus();
+                    console.info(`Toolbar EMAIL v445: chose first intact contact-header email: "${existing}" -> "${first}".`);
+                    return true;
                 }
                 console.info(`Toolbar EMAIL v417: ambiguous PDF candidates=${broken.length}; complete corroborated candidates=${complete.size}.`);
             }
