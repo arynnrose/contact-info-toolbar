@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.442
+// @version      9.6.443
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5548,6 +5548,25 @@ function fillNameFieldsWithLoadRetries() {
         }
         return [...found];
     }
+    // v443: Repair a single PDF conversion gap inside a KNOWN provider domain.
+    // Only a complete, bounded email in the contact header; never join local-part
+    // words, phone numbers, ZIPs, or unknown domains.
+    function frt7FbsplKnownDomainGapEmail() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '')
+            .slice(0, 1000).replace(/[\u00a0\u2007\u202f]/g, ' ');
+        const stop = raw.search(/\b(?:Willing to relocate|Work authorization|Work experience|Professional summary|Education|Skills|Areas of expertise)\b/i);
+        const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 450);
+        const providers = new Set(['gmail.com','googlemail.com','yahoo.com','ymail.com','outlook.com','hotmail.com','icloud.com','aol.com','live.com','msn.com']);
+        const found = new Set();
+        const re = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]+)@([A-Z0-9]+) ([A-Z0-9]+\.com)(?=$|[^A-Z0-9.-])/gi;
+        for (const hit of header.matchAll(re)) {
+            const domain = (hit[3] + hit[4]).toLowerCase();
+            if (!providers.has(domain)) continue;
+            const candidate = sanitizeEmail(hit[2] + '@' + domain);
+            if (!isObviousOcrEmailDomainIssue(candidate)) found.add(candidate);
+        }
+        return found.size === 1 ? [...found][0] : null;
+    }
     // v441: Name-anchored repair of ONE internal space in an unstructured
     // contact header. Unlike the old recovery, this never prepends an arbitrary
     // word to a complete email. Require a long fragment beginning with the
@@ -5817,8 +5836,9 @@ function fillNameFieldsWithLoadRetries() {
                 console.info(`Toolbar EMAIL v442: single header gap exactly matches existing contact email: "${contactConfirmed}"; preserved.`);
                 return true;
             }
-            const nameAnchored = headerEmail ? null : frt7FbsplNameAnchoredGapEmail();
-            const broken = headerEmail ? [headerEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
+            const domainGap = headerEmail ? null : frt7FbsplKnownDomainGapEmail();
+            const nameAnchored = (headerEmail || domainGap) ? null : frt7FbsplNameAnchoredGapEmail();
+            const broken = headerEmail ? [headerEmail] : domainGap ? [domainGap] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
