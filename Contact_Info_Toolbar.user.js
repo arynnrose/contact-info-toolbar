@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.448
+// @version      9.6.449
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10136,8 +10136,49 @@ function frt7TrustedHeaderPairBypassesSourceProtection() {
     }
 }
 
+// v449: A resume header with an explicit City, ST ZIP matching the current
+// ZIP can override a source city that disagrees. Restrict to the beginning of
+// the resume and require the existing ZIP verbatim; never infer from prose.
+function frt7ExplicitHeaderZipCorrection() {
+    try {
+        const zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim().slice(0,5);
+        if (!/^\d{5}$/.test(zip)) return null;
+        const header = String(getResumeText() || "").slice(0, 450);
+        const escapedZip = zip;
+        const re = new RegExp("\\b([A-Za-z][A-Za-z.'’ -]{1,45}?),\\s*([A-Z]{2})\\s+" + escapedZip + "\\b", "gi");
+        let match;
+        while ((match = re.exec(header))) {
+            const state = match[2].toUpperCase();
+            if (String(frt7StateFromZipV171(zip) || "").toUpperCase() !== state) continue;
+            // The city may be preceded by a person's name. Test trailing
+            // 1-4 word suffixes, preferring a known database/learned city.
+            const words = match[1].trim().split(/\s+/);
+            for (let n = Math.min(4, words.length); n >= 1; n--) {
+                const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
+                const known = (typeof findTrustedLearnedCityInHeader === "function" &&
+                    findTrustedLearnedCityInHeader(city + ", " + state)) ||
+                    (typeof findUsCityDatabaseInHeader === "function" &&
+                    findUsCityDatabaseInHeader(city + ", " + state));
+                if (known && String(known.city || "").toLowerCase() === city.toLowerCase() &&
+                    String(known.state || "").toUpperCase() === state)
+                    return {city, state, zip};
+            }
+        }
+    } catch (e) { console.warn("Toolbar CITY v449: header ZIP validation failed", e); }
+    return null;
+}
+
 function frt7SourceProtectionAllowed() {
     if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
+    const explicitZipHeader = frt7ExplicitHeaderZipCorrection();
+    if (explicitZipHeader) {
+        const currentCity = normalizeContactDisplayCase(String(document.getElementById("txtCityDataEntry")?.value || "").trim());
+        const currentState = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+        if (currentCity.toLowerCase() !== explicitZipHeader.city.toLowerCase() || currentState !== explicitZipHeader.state) {
+            console.info(`Toolbar CITY v449: source lock bypassed for verified header ${explicitZipHeader.city}, ${explicitZipHeader.state} ${explicitZipHeader.zip}.`);
+            return false;
+        }
+    }
     const trustedHeader = frt7TrustedHeaderPairBypassesSourceProtection();
     if (trustedHeader) {
         // v332: An incomplete suffix of the source-provided city is NOT a
