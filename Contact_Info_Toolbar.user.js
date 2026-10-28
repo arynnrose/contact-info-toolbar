@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.447
+// @version      9.6.448
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4695,9 +4695,21 @@ function fillNameFields(options = {}) {
                 const repairedFold = foldLetters(repairedLast);
                 const currentFold = foldLetters(currentLast);
 
+                // v448: A verified complete surname must not absorb the next
+                // lowercase description word (Ayana Wylie dependable worker).
+                // Preserve genuine split-surname repairs when the rendered heading
+                // does NOT already confirm the current first and last names.
+                const explicitHeading = getExplicitResumeNameHeading();
+                const currentNameVerified = explicitHeading &&
+                    foldLetters(explicitHeading.first) === foldLetters(currentFirst) &&
+                    foldLetters(explicitHeading.last) === currentFold;
+                if (currentNameVerified) {
+                    console.info(`Toolbar NAME v448: preserved verified heading surname "${currentLast}"; refused to append "${continuation}".`);
+                }
+
                 // v418: A flattened email local-part can repeat the first name after a correct surname.
                 // Never append that repeated first name to the surname.
-                if (continuation.length >= 2 && foldLetters(continuation) !== foldLetters(currentFirst) && repairedFold.length >= 3 && repairedFold !== currentFold) {
+                if (!currentNameVerified && continuation.length >= 2 && foldLetters(continuation) !== foldLetters(currentFirst) && repairedFold.length >= 3 && repairedFold !== currentFold) {
                     console.info(
                         `Toolbar NAME v263: direct split Last Name repair "${currentLast} ${continuation}" -> "${repairedLast}".`
                     );
@@ -5029,8 +5041,15 @@ function scheduleRenderedNameRefinement() {
         const currentLastFoldForTruncation = foldTypography(currentLast);
         const proposedLastFoldForTruncation = foldTypography(proposedLast);
         const sameFirstForTruncation = foldTypography(currentFirst) === foldTypography(proposedFirst);
+        // v448: A previously incorrect joined surname is not protected from
+        // correction back to the independently verified rendered heading.
+        const verifiedHeadingForRestore = getExplicitResumeNameHeading();
+        const verifiedRestore = verifiedHeadingForRestore &&
+            foldTypography(verifiedHeadingForRestore.first) === foldTypography(proposedFirst) &&
+            foldTypography(verifiedHeadingForRestore.last) === foldTypography(proposedLast);
         if (
             sameFirstForTruncation &&
+            !verifiedRestore &&
             currentLastFoldForTruncation.length >= 3 &&
             proposedLastFoldForTruncation.length >= 1 &&
             proposedLastFoldForTruncation.length < currentLastFoldForTruncation.length &&
