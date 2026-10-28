@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.445
+// @version      9.6.446
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4875,9 +4875,28 @@ function fillNameFields(options = {}) {
             Boolean(firstInitialOf(existingFirst)) && Boolean(firstInitialOf(existingLast)) &&
             isAutoNameConfirmed(name);
 
+        // v446: Exact joined-name recovery. The resume must START with the
+        // independently detected full name, and one existing field must equal
+        // the entire First+Last concatenation. Never accept partial substrings.
+        const foldJoinedName = value => normalizeUnicode(String(value || ""))
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^A-Za-z]/g, "").toLowerCase();
+        const rawNameHeader = String(document.getElementById("txtResumeRaw")?.value || "")
+            .replace(/\u00a0/g, " ").trimStart().slice(0, 300);
+        const escapeHeaderName = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const exactHeaderName = proposedFirst.length >= 2 && proposedLast.length >= 2 &&
+            new RegExp(`^${escapeHeaderName(proposedFirst)}\\s+${escapeHeaderName(proposedLast)}(?=\\s|[^A-Za-z]|$)`, "i").test(rawNameHeader);
+        const joinedProposed = foldJoinedName(proposedFirst + proposedLast);
+        const isExactJoinedHeaderName = Boolean(
+            exactHeaderName && joinedProposed.length >= 6 &&
+            (foldJoinedName(existingFirst) === joinedProposed ||
+             foldJoinedName(existingLast) === joinedProposed) &&
+            !isRejectedAutoName(name)
+        );
+
         // v317: Never let digits or punctuation bypass the BOTH-field guard.
         // cleanExistingNameFields() already strips digits independently.
-        if (firstWouldChange && lastWouldChange && !isExactFirstLastFlip && !isMatchingInitialsConfirmedName) {
+        if (firstWouldChange && lastWouldChange && !isExactFirstLastFlip && !isMatchingInitialsConfirmedName && !isExactJoinedHeaderName) {
             console.warn(
                 `Toolbar NAME v317: refused replacement of BOTH name fields ` +
                 `"${existingFirst} ${existingLast}" -> "${proposedFirst} ${proposedLast}"; ` +
@@ -4885,6 +4904,10 @@ function fillNameFields(options = {}) {
             );
             pendingAutoNameLearning = null;
             return cleanedExisting;
+        }
+
+        if (firstWouldChange && lastWouldChange && isExactJoinedHeaderName) {
+            console.info(`Toolbar NAME v446: exact joined contact name matches resume header; allowed both-field correction -> ${proposedFirst} / ${proposedLast}.`);
         }
 
         if (firstWouldChange && lastWouldChange && isMatchingInitialsConfirmedName && !isExactFirstLastFlip) {
