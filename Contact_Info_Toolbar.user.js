@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.454
+// @version      9.6.455
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10137,6 +10137,36 @@ function frt7TrustedHeaderPairBypassesSourceProtection() {
     }
 }
 
+// v455: Word-export code can precede the real contact header. Only accept a
+// complete street + City, ST ZIP adjacent to the applicant's actual contact
+// email/phone and preceding the first resume section. Never use job addresses.
+function frt7WordCodeContactAddress() {
+    try {
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "");
+        if (!raw || !/function\s+mso|msoBrowserCheck|document\.styleSheets\.dynCom/i.test(raw.slice(0, 4500))) return null;
+        const email = String(document.getElementById("txtEmail")?.value || "").trim().toLowerCase();
+        const phone = String(document.getElementById("txtPhoneDataEntry")?.value || document.getElementById("txtPhone")?.value || "").replace(/\D/g, "").slice(-10);
+        if (!email.includes("@") || phone.length !== 10) return null;
+        const emailAt = raw.toLowerCase().indexOf(email);
+        if (emailAt < 0) return null;
+        const start = Math.max(0, emailAt - 240);
+        const segment = raw.slice(start, emailAt + email.length + 10);
+        if (!segment.replace(/\D/g, "").includes(phone)) return null;
+        const re = /\b\d{1,6}\s+[A-Za-z][A-Za-z.'’ -]{1,65}?\s*,\s*([A-Za-z][A-Za-z.'’ -]{1,55}?)\s*,\s*([A-Z]{2})\s+(\d{5})(?!\d)/gi;
+        let m;
+        while ((m = re.exec(segment))) {
+            const state = m[2].toUpperCase(), zip = m[3];
+            if (frt7StateFromZipV171(zip) !== state) continue;
+            const words = m[1].trim().split(/\s+/);
+            for (let n = Math.min(4, words.length); n >= 1; n--) {
+                const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
+                if (isUsCityDatabasePair(city, state)) return {city, state, zip, wordContact:true};
+            }
+        }
+    } catch (e) { console.warn("Toolbar CITY v455: Word contact-address check failed", e); }
+    return null;
+}
+
 // v449: A resume header with an explicit City, ST ZIP matching the current
 // ZIP can override a source city that disagrees. Restrict to the beginning of
 // the resume and require the existing ZIP verbatim; never infer from prose.
@@ -10171,14 +10201,14 @@ function frt7ExplicitHeaderZipCorrection() {
 
 // v452: hand the verified header result to the actual Auto writer, not just the lock.
 function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
-    const loc = frt7ExplicitHeaderZipCorrection();
+    const loc = frt7WordCodeContactAddress() || frt7ExplicitHeaderZipCorrection();
     if (!loc) return false;
     const sourceOK = frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource();
     const cityEl = document.getElementById("txtCityDataEntry");
     const stateEl = document.getElementById("txtStateDataEntry");
     const zipEl = document.getElementById("txtZipDataEntry");
     const before = normalizeContactDisplayCase(String(cityEl?.value || ""));
-    if (before.toLowerCase() === loc.city.toLowerCase()) return true;
+    if (before.toLowerCase() === loc.city.toLowerCase() && String(stateEl?.value || "").trim().toUpperCase() === loc.state && String(zipEl?.value || "").trim() === loc.zip) return true;
     const touched = frt7HumanTouchedLocation();
     const cityLocked = cityEl ? isManualContactLocked("city", cityEl) : true;
     const stateLocked = stateEl ? isManualContactLocked("state", stateEl) : true;
@@ -10196,19 +10226,22 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
         citySettingEnabled = parsedFields?.city !== false;
     } catch (_) { citySettingEnabled = false; }
     if (!sourceOK || !citySettingEnabled || touched || cityLocked || stateLocked || zipLocked ||
-        !cityEl || !stateEl || !zipEl || !zipMatches || !stateMatches) {
+        !cityEl || !stateEl || !zipEl || (!loc.wordContact && (!zipMatches || !stateMatches))) {
         console.warn(`Toolbar CITY v454: verified ${loc.city}, ${loc.state} ${loc.zip} but write blocked: source=${sourceOK}, citySetting=${citySettingEnabled}, internalAllowCity=${Boolean(allowCity)}, touched=${touched}, locks=${cityLocked}/${stateLocked}/${zipLocked}, stateMatches=${stateMatches}, zipMatches=${zipMatches}, fields=${Boolean(cityEl)}/${Boolean(stateEl)}/${Boolean(zipEl)}.`);
         return false;
     }
     cityEl.value = loc.city;
     triggerEvents(cityEl);
+    if (loc.wordContact && !stateMatches) { stateEl.value = loc.state; triggerEvents(stateEl); }
+    if (loc.wordContact && !zipMatches) { zipEl.value = loc.zip; triggerEvents(zipEl); }
+    if (loc.wordContact) frt7SetAuthoritativeHeaderLocation(loc, "v455 verified Word contact address");
     console.info(`Toolbar CITY v454: verified header correction ${before}, ${loc.state} ${loc.zip} -> ${loc.city}, ${loc.state} ${loc.zip}; preserved ZIP (internalAllowCity=${Boolean(allowCity)}).`);
     return true;
 }
 
 function frt7SourceProtectionAllowed() {
     if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
-    const explicitZipHeader = frt7ExplicitHeaderZipCorrection();
+    const explicitZipHeader = frt7WordCodeContactAddress() || frt7ExplicitHeaderZipCorrection();
     if (explicitZipHeader) {
         const currentCity = normalizeContactDisplayCase(String(document.getElementById("txtCityDataEntry")?.value || "").trim());
         const currentState = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
