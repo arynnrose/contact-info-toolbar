@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.455
+// @version      9.6.456
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5049,7 +5049,8 @@ function scheduleRenderedNameRefinement() {
             foldTypography(verifiedHeadingForRestore.last) === foldTypography(proposedLast);
         if (
             sameFirstForTruncation &&
-            !verifiedRestore &&
+            // v456: Even an explicit Word/iframe heading can be a truncated
+            // table cell ("Harri" + "son"). Never exempt prefix shortening.
             currentLastFoldForTruncation.length >= 3 &&
             proposedLastFoldForTruncation.length >= 1 &&
             proposedLastFoldForTruncation.length < currentLastFoldForTruncation.length &&
