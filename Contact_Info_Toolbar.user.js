@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.456
+// @version      9.6.457
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -414,6 +414,31 @@ function sanitizeEmail(email) {
         clean = clean.slice(0, atIndex + 1 + hardTld.index + hardTld[0].length);
     }
 
+    // v457: Final shared guard: a verified CONTACT phone may be glued directly
+    // to an email in flattened resumes, including FBSPL recovery candidates.
+    // Apply this at the sanitizer boundary so every email path is protected.
+    // Never remove arbitrary numeric usernames: require the exact contact phone
+    // (or its proven 7-digit tail), followed by an alphabetic local part.
+    const phoneInput = document.getElementById("txtPhoneDataEntry") || document.getElementById("txtPhone");
+    let phoneDigits = String(phoneInput?.value || "").replace(/\D/g, "");
+    if (phoneDigits.length === 11 && phoneDigits.startsWith("1")) phoneDigits = phoneDigits.slice(1);
+    if (/^[2-9]\d{9}$/.test(phoneDigits) && phoneDigits.slice(3, 6) !== "000") {
+        const at = clean.indexOf("@");
+        if (at > 0) {
+            const local = clean.slice(0, at);
+            for (const digits of [phoneDigits, phoneDigits.slice(3)]) {
+                const decorated = digits.split("").join("[\\s()./\\-]*");
+                const match = local.match(new RegExp("^[\\s()./\\-]*" + decorated + "[\\s()./\\-]*(?=[A-Za-z])", "i"));
+                if (!match) continue;
+                const remaining = local.slice(match[0].length);
+                if (/^[A-Za-z][A-Za-z0-9._%+\-]*$/.test(remaining)) {
+                    console.info(`Toolbar EMAIL v457: removed confirmed contact phone from email: "${clean}" -> "${remaining + clean.slice(at)}".`);
+                    clean = remaining + clean.slice(at);
+                    break;
+                }
+            }
+        }
+    }
     // Preserve Apple relay handling, then normalize casing.
     clean = clean.replace(/\.appleid\.com.*$/i, ".appleid.com");
     return clean.toLowerCase();
@@ -5906,7 +5931,7 @@ function fillNameFieldsWithLoadRetries() {
             const domainGap = headerEmail ? null : frt7FbsplKnownDomainGapEmail();
             const splitNameEmail = (headerEmail || domainGap) ? null : frt7FbsplSplitNameEmail();
             const nameAnchored = (headerEmail || domainGap || splitNameEmail) ? null : frt7FbsplNameAnchoredGapEmail();
-            const broken = headerEmail ? [headerEmail] : domainGap ? [domainGap] : splitNameEmail ? [splitNameEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails();
+            const broken = (headerEmail ? [headerEmail] : domainGap ? [domainGap] : splitNameEmail ? [splitNameEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails()).map(candidate => sanitizeEmail(candidate));
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
