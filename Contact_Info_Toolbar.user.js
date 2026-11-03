@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.458
+// @version      9.6.459
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5578,9 +5578,14 @@ function fillNameFieldsWithLoadRetries() {
         const stop = raw.search(/\b(?:Willing to relocate|Authorized to work|Work experience|Professional summary|Professional Summary|Education|Skills)\b/i);
         const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 400);
         const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?:com|net|org|edu|gov)\b/i;
+        // v459: Some PDF headers have a single whitespace gap immediately before @.
+        // Normalize only inside an isolated pipe-delimited email field, never across
+        // separate fields or arbitrary prose. Keep all existing candidate guards.
+        const normalizeAtGap = field => field.replace(/([A-Z0-9._%+-]+)[ \t]@(?=[A-Z0-9.-]+\.(?:com|net|org|edu|gov)\b)/gi, '$1@');
         // A vertical bar marks a true field boundary in these PDF headers.
         // Do not join across bars or across a run of 2+ spaces.
-        for (const field of header.split('|').slice(1)) {
+        for (const rawField of header.split('|').slice(1)) {
+            const field = normalizeAtGap(rawField);
             if (!emailRe.test(field)) continue;
             const chunks = field.split(/\s{2,}/).map(x => x.trim()).filter(Boolean);
             for (const chunk of chunks) {
@@ -6266,7 +6271,7 @@ function fillNameFieldsWithLoadRetries() {
                     if (window.__frt7_auto_email_enabled === false ||
                         (lifecycleKey && getManualContactApplicantKey() !== lifecycleKey)) return;
                     const input = document.querySelector("#txtEmail");
-                    const expectedNow = sanitizeEmail(frt7RemoveContactPhoneFromEmail(frt7ResumeEmailForContact() || ""));
+                    const expectedNow = sanitizeEmail(frt7RemoveContactPhoneFromEmail((frt7ResumeEmailForContact() || (frt7IsFbsplSource() ? frt7FbsplHeaderEmail() : null) || "")));
                     if (!input || !expectedNow ||
                         String(input.value || "").trim().toLowerCase() === expectedNow.toLowerCase()) return;
                     if (isManualContactLocked("email", input) &&
@@ -6312,7 +6317,8 @@ function fillNameFieldsWithLoadRetries() {
             }
 
             const rawText = getResumeText();
-            const rawEmail = frt7ResumeEmailForContact();
+            const rawEmail = frt7ResumeEmailForContact() ||
+                (frt7IsFbsplSource() ? frt7FbsplHeaderEmail() : null);
             if (!rawText.trim() || !rawEmail) {
                 if (attemptIndex < retryDelays.length - 1) {
                     attemptIndex++;
