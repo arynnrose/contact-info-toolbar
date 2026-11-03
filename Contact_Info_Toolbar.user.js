@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.462
+// @version      9.6.463
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5559,6 +5559,39 @@ function fillNameFieldsWithLoadRetries() {
 
         // If nothing would change, there is nothing to block.
         if (current && current === proposed) return false;
+
+        // v463: Never downgrade a correctly spelled, established mail provider
+        // to an OCR-damaged provider in the proposed address. Applies to Auto
+        // and manual Email-button writes, but not to a user's direct typing.
+        // Do not guess or rewrite the resume's damaged domain; keep contact as-is.
+        const establishedProviders = new Set([
+            "gmail.com", "googlemail.com", "yahoo.com", "ymail.com",
+            "outlook.com", "hotmail.com", "live.com", "msn.com",
+            "aol.com", "icloud.com"
+        ]);
+        const currentDomain = emailDomain(current);
+        const proposedDomain = emailDomain(proposed);
+        const providerTypo = (() => {
+            if (!establishedProviders.has(currentDomain) || !proposedDomain || proposedDomain === currentDomain) return false;
+            const currentRoot = currentDomain.split(".")[0];
+            const proposedRoot = proposedDomain.split(".")[0];
+            if (proposedDomain.split(".").slice(1).join(".") !== currentDomain.split(".").slice(1).join(".")) return false;
+            // A one-character deletion/insertion in the provider name, e.g.
+            // gmail.com -> gmai.com. Only compare to the CURRENT known provider.
+            if (currentRoot.length === proposedRoot.length + 1) {
+                return [...currentRoot].some((_, i) => currentRoot.slice(0, i) + currentRoot.slice(i + 1) === proposedRoot);
+            }
+            if (proposedRoot.length === currentRoot.length + 1) {
+                return [...proposedRoot].some((_, i) => proposedRoot.slice(0, i) + proposedRoot.slice(i + 1) === currentRoot);
+            }
+            return false;
+        })();
+        if (establishedProviders.has(currentDomain) &&
+            proposedDomain !== currentDomain &&
+            (isObviousOcrEmailDomainIssue(proposed) || providerTypo)) {
+            console.info(`Toolbar EMAIL v463: preserved known provider "${currentDomain}"; rejected OCR-damaged candidate "${proposedDomain}".`);
+            return true;
+        }
 
         // v196: An Indeed relay in the contact field is disposable. Always allow
         // the real resume email to replace it, including azulmail.net and .edu.
