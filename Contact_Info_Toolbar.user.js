@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.457
+// @version      9.6.458
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5920,6 +5920,35 @@ function fillNameFieldsWithLoadRetries() {
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
+            // v458: PDF/Word resumes can prepend the *verified contact phone*
+            // directly to the real email. The CSS/Word header may exceed the
+            // short windows used by the ordinary FBSPL extractors. Only repair
+            // an exact 10-digit phone + alphabetic email in the resume contact
+            // header, with one unambiguous match. Never guess other prefixes.
+            const verifiedPhone = String(document.getElementById('txtPhoneDataEntry')?.value ||
+                document.getElementById('txtPhone')?.value || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+            if (isUsableTenDigitPhone(verifiedPhone)) {
+                const resumeRaw = String(getResumeText() || getIframeResumeTextForRareFallback() || '');
+                // Word conversion can include long CSS before the actual header.
+                // The first work/summary/skills section ends contact extraction.
+                const headerEnd = resumeRaw.search(/\b(?:Experienced leader with|Professional summary|Work History|Work Experience|Skills)\b/i);
+                const contactHeader = (headerEnd >= 0 ? resumeRaw.slice(0, headerEnd) : resumeRaw.slice(0, 14000)).slice(-5000);
+                const pattern = new RegExp('(^|[^0-9A-Za-z._%+\\-@])' + verifiedPhone + '\\s{0,8}' +
+                    '([A-Za-z][A-Za-z0-9._%+\\-]*@[A-Za-z0-9.-]+\\.(?:com|net|org|edu|gov))(?=$|[^A-Za-z0-9.-])', 'gi');
+                const candidates = [...new Set([...contactHeader.matchAll(pattern)].map(m => sanitizeEmail(m[2])))];
+                if (candidates.length === 1 && !isObviousOcrEmailDomainIssue(candidates[0])) {
+                    const existing = String(emailInput.value || '').trim().toLowerCase();
+                    const confirmed = candidates[0];
+                    if (confirmed === existing) { frt7FbsplEmailStatus(); return true; }
+                    if (!isManualContactLocked('email', emailInput) &&
+                        !shouldBlockProtectedEmailChange(existing, confirmed)) {
+                        runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v458: recovered email after exact verified contact phone: "${existing}" -> "${confirmed}".`);
+                        return true;
+                    }
+                }
+            }
             const headerEmail = frt7FbsplHeaderEmail();
             const existingForGap = String(emailInput.value || '').trim().toLowerCase();
             const contactConfirmed = headerEmail ? null : frt7FbsplContactConfirmedGapEmail(existingForGap);
