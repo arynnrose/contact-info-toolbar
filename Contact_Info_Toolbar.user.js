@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.461
+// @version      9.6.462
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6830,7 +6830,8 @@ function fillNameFieldsWithLoadRetries() {
         const v329TrustedCity = String(v329Trusted?.city || "").trim();
         const v329TrustedState = String(v329Trusted?.state || "").trim().toUpperCase();
         if (v329TrustedCity && v329TrustedState === currentState &&
-            normalizeLearnedCity(v329TrustedCity) === currentNorm) {
+            normalizeLearnedCity(v329TrustedCity) === currentNorm &&
+            !frt7SavedCitySuffixV462(currentCity, currentState)) {
             console.info(`Toolbar CITY v329: preserved exact authoritative header city "${currentCity}", ${currentState}; skipped suffix canonicalization.`);
             return false;
         }
@@ -7452,14 +7453,41 @@ function fillNameFieldsWithLoadRetries() {
         return null;
     }
 
+    // v462: A saved City+State suffix beats a longer, unrecognized contact-city
+    // string when the longer string is not itself a saved or U.S.-database city.
+    // Preserve real multiword cities (e.g. East Syracuse, Lee's Summit).
+    function frt7SavedCitySuffixV462(city, state) {
+        const full = normalizeContactDisplayCase(String(city || "").trim());
+        const st = String(state || "").trim().toUpperCase();
+        if (!full || !/^[A-Z]{2}$/.test(st)) return "";
+        const validSaved = value => {
+            const entry = learnedCitiesCache?.[learnedCityStateKey(value, st)];
+            return Boolean(entry && entry.deleted !== true && entry.city &&
+                entry.trustedManualCity !== false &&
+                String(entry.state || "").trim().toUpperCase() === st);
+        };
+        if (validSaved(full) || isUsCityDatabasePair(full, st)) return "";
+        const words = full.split(/\s+/);
+        const matches = [];
+        for (let i = 1; i < words.length; i++) {
+            const suffix = words.slice(i).join(" ");
+            if (validSaved(suffix)) matches.push(suffix);
+        }
+        // Prefer the longest saved suffix. Never guess from a bare unsaved word.
+        return matches.sort((a, b) => b.length - a.length)[0] || "";
+    }
+
     function frt7SetAuthoritativeHeaderLocation(loc, reason = "header") {
         const state = String(loc?.state || "").trim().toUpperCase();
         const city = normalizeContactDisplayCase(String(loc?.city || "").trim());
         if (!frt7ValidHeaderCity({city, state})) return false;
+        const savedSuffix = frt7SavedCitySuffixV462(city, state);
+        const authoritativeCity = savedSuffix || city;
+        if (savedSuffix) console.info(`Toolbar CITY v462: corrected unrecognized header city "${city}, ${state}" to saved pair "${savedSuffix}, ${state}".`);
 
         frt7AuthoritativeHeaderLocation = {
             key: frt7AuthoritativeLocationKey(),
-            city,
+            city: authoritativeCity,
             state,
             reason
         };
@@ -8918,6 +8946,7 @@ function findTrustedLearnedCityInHeader(text) {
         document.getElementById("txtStateDataEntry")?.value || ""
     ).trim().toUpperCase();
     if (existingHeaderCity && existingHeaderState &&
+        !frt7SavedCitySuffixV462(existingHeaderCity, existingHeaderState) &&
         candidates.some(c => c.withState &&
             c.state === existingHeaderState &&
             existingHeaderCity.toLowerCase().endsWith(" " + c.city.toLowerCase()))) {
@@ -8941,6 +8970,7 @@ function findTrustedLearnedCityInHeader(text) {
     // name (Royal Palm Beach, Florida), not only its abbreviation (FL).
     // The v325 guard above checked FL literally and missed this case.
     if (existingHeaderCity && existingHeaderState &&
+        !frt7SavedCitySuffixV462(existingHeaderCity, existingHeaderState) &&
         candidates.some(c => c.withState && c.state === existingHeaderState &&
             existingHeaderCity.toLowerCase().endsWith(" " + c.city.toLowerCase()))) {
         const stateFullName = Object.entries(STATE_MAP).find(([name, code]) =>
@@ -8980,7 +9010,8 @@ function findTrustedLearnedCityInHeader(text) {
     // v336: Apostrophe-tolerant full-city protection for Lee's Summit and peers.
     // Word/curly apostrophe variants must not let a learned suffix replace the
     // original complete city and trigger an unrelated ZIP lookup.
-    if (existingHeaderCity && existingHeaderState) {
+    if (existingHeaderCity && existingHeaderState &&
+        !frt7SavedCitySuffixV462(existingHeaderCity, existingHeaderState)) {
         const flexibleCity = escapeRegex(existingHeaderCity)
             .replace(/[\'’]/g, "['’]").replace(/\s+/g, "\\s+");
         const fullState = Object.entries(STATE_MAP).find(([name, code]) =>
@@ -9001,7 +9032,8 @@ function findTrustedLearnedCityInHeader(text) {
     // loses the prefix (e.g. Lee's) while still finding Summit, MO.
     // No protection for blank ZIPs, different states, or unrelated city names.
     const existingZipForSuffixGuard = String(document.getElementById("txtZipDataEntry")?.value || "").trim();
-    if (existingHeaderCity && existingHeaderState && /^\d{5}(?:-\d{4})?$/.test(existingZipForSuffixGuard)) {
+    if (existingHeaderCity && existingHeaderState &&
+        !frt7SavedCitySuffixV462(existingHeaderCity, existingHeaderState) && /^\d{5}(?:-\d{4})?$/.test(existingZipForSuffixGuard)) {
         const full = existingHeaderCity.toLocaleLowerCase().replace(/[’‘]/g, "'");
         const suffixCandidates = candidates.filter(c => c.withState &&
             String(c.state || "").toUpperCase() === existingHeaderState &&
@@ -9052,6 +9084,12 @@ function findTrustedLearnedCityInHeader(text) {
     );
     filteredPool.sort((a,b) => a.index - b.index || b.city.length - a.city.length);
     const winner = filteredPool[0];
+    const v462Suffix = frt7SavedCitySuffixV462(winner.city, winner.state);
+    if (v462Suffix) {
+        console.info(`Toolbar CITY v462: selected saved suffix "${v462Suffix}, ${winner.state}" instead of unrecognized "${winner.city}, ${winner.state}".`);
+        winner.city = v462Suffix;
+        winner.learned = true;
+    }
     // v447: Punctuation between City and State belongs to the separator,
     // never to the City. Keep the candidate and its offset otherwise intact.
     winner.city = String(winner.city || "").trim().replace(/[,;]+\s*$/, "").trim();
