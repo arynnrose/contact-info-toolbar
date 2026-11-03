@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.459
+// @version      9.6.460
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4845,6 +4845,38 @@ function fillNameFields(options = {}) {
         }
     }
 
+    // v460: Narrow, independently corroborated hyphenated-surname correction.
+    // Only allow dropping entire hyphen-separated surname components, never a
+    // partial word. Both the raw resume's leading name and rendered heading must
+    // explicitly agree with the proposed first and last name.
+    function frt7V460ConfirmedHyphenSurnameShortening(existingFirst, existingLast, proposedFirst, proposedLast) {
+        const fold = value => normalizeUnicode(String(value || ""))
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/[’]/g, "'").toLowerCase().trim();
+        const oldParts = fold(existingLast).split(/[-‐‑–—]/).map(x => x.trim());
+        const newLast = fold(proposedLast);
+        if (oldParts.length < 2 || !newLast || oldParts.some(x => !x)) return false;
+        if (fold(existingFirst) !== fold(proposedFirst)) return false;
+        // Require complete hyphen components, not partial fragments.
+        const properShortening = Array.from({length:oldParts.length-1}, (_, i) =>
+            oldParts.slice(0, i+1).join("-")
+        ).includes(newLast);
+        if (!properShortening) return false;
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "")
+            .replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+        const expected = `${fold(proposedFirst)} ${newLast}`;
+        // Exact first two name tokens in raw header, followed by a location/contact
+        // boundary rather than an additional surname token.
+        const rawFold = fold(raw);
+        if (!rawFold.startsWith(expected + " ")) return false;
+        const after = rawFold.slice(expected.length).trimStart();
+        if (!/^[a-z][a-z .'-]{1,70},\s*[a-z]{2}\s*\d{5}\b/.test(after)) return false;
+        const heading = getExplicitResumeNameHeading();
+        if (!heading || fold(heading.first) !== fold(proposedFirst) ||
+            fold(heading.last) !== newLast) return false;
+        return true;
+    }
+
     // v355: Apply the EXISTING v265 rendered-refinement truncation protection
     // to the primary Auto Name write path too. v261 only checks txtResumeRaw,
     // which can contain merely "Life" for iframe-based Word resumes.
@@ -4865,7 +4897,8 @@ function fillNameFields(options = {}) {
             currentFold.length >= 3 && proposedFold.length >= 1 &&
             proposedFold.length < currentFold.length &&
             (currentFold.startsWith(proposedFold) || currentFold.endsWith(proposedFold)) &&
-            !frt7V434ConcatenatedHeader) {
+            !frt7V434ConcatenatedHeader &&
+            !frt7V460ConfirmedHyphenSurnameShortening(existingFirst, existingLast, proposedFirst, proposedLast)) {
             console.info(`Toolbar NAME v355: existing v265 surname truncation protection applied to primary Auto path; preserved "${existingLast}" instead of "${proposedLast}" (raw resume may be empty; iframe name may be split).`);
             traceAuto("BLOCK", "v355 prefix/suffix truncation protection");
             pendingAutoNameLearning = null;
