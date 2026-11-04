@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.463
+// @version      9.6.464
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -1396,6 +1396,21 @@ function isUsableTenDigitPhone(digits) {
         return Boolean(normalized && rejectedAutoNamesCache[normalized]?.deleted === true);
     }
 
+    // v464: A rejected single-word entry may coincide with the applicant's
+    // already-present first name. Permit a surname-only correction in that case,
+    // but never exempt job/company vocabulary, rejected surnames or full phrases.
+    function frt7IsUnchangedFirstNameWordException(name, rejectedToken) {
+        const firstInput = document.getElementById("txtFirstNameDataEntry") || document.getElementById("txtFirstName");
+        const lastInput = document.getElementById("txtLastNameDataEntry") || document.getElementById("txtLastName");
+        const first = normalizeRejectedName(name?.first);
+        const last = normalizeRejectedName(name?.last);
+        const existingFirst = normalizeRejectedName(firstInput?.value);
+        const existingLast = normalizeRejectedName(lastInput?.value);
+        return Boolean(first && last && first === existingFirst && last !== existingLast &&
+            rejectedToken === first && !last.split(/\s+/).includes(rejectedToken) &&
+            !REJECTED_HARD_WORDS.has(rejectedToken));
+    }
+
     function isRejectedAutoName(name) {
         const fullName = `${name?.first || ""} ${name?.last || ""}`.trim();
         const normalizedFullName = normalizeRejectedName(fullName);
@@ -1410,7 +1425,8 @@ function isUsableTenDigitPhone(digits) {
             const blockMode = getRejectedBlockMode(entry);
 
             if (entryWords.length === 1) {
-                if (blockMode === "word" && proposedWords.includes(entryWords[0])) {
+                if (blockMode === "word" && proposedWords.includes(entryWords[0]) &&
+                    !frt7IsUnchangedFirstNameWordException(name, entryWords[0])) {
                     console.warn(`Toolbar NAME v64: hard word-blocked "${fullName}" because it contains "${entry.name}".`);
                     return true;
                 }
@@ -1448,7 +1464,8 @@ function isUsableTenDigitPhone(digits) {
             const blockMode = getRejectedBlockMode(entry);
 
             if (entryWords.length === 1) {
-                if (blockMode === "word" && proposedWords.includes(entryWords[0])) return true;
+                if (blockMode === "word" && proposedWords.includes(entryWords[0]) &&
+                    !frt7IsUnchangedFirstNameWordException(name, entryWords[0])) return true;
                 if (blockMode === "exact" && normalizedFullName === normalizedEntry) return true;
             } else if (normalizedFullName === normalizedEntry) {
                 return true;
