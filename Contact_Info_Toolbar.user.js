@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.465
+// @version      9.6.466
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5827,6 +5827,35 @@ function fillNameFieldsWithLoadRetries() {
         }
         return found.size === 1 ? [...found][0] : null;
     }
+    // v466: A tightly bounded FBSPL/Indeed header split may contain initials
+    // followed by the first letters of the verified surname: hbsm ith1992@icloud.com.
+    // Do not join ordinary words, complete name tokens, or other header fields.
+    function frt7FbsplInitialSurnameGapEmail() {
+        const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '')
+            .slice(0, 700).replace(/[\u00a0\u2007\u202f]/g, ' ');
+        const stop = raw.search(/\b(?:Willing to relocate|Work authorization|Work experience|Professional summary|Education|Skills|Areas of expertise)\b/i);
+        const header = stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 350);
+        const first = String(document.getElementById('txtFirstNameDataEntry')?.value || document.getElementById('txtFirstName')?.value || '').trim().toLowerCase();
+        const last = String(document.getElementById('txtLastNameDataEntry')?.value || document.getElementById('txtLastName')?.value || '').trim().toLowerCase();
+        if (!/^[a-z]{3,}$/.test(first) || !/^[a-z]{4,}$/.test(last)) return null;
+        const matches = new Set();
+        // Exactly one space, and a bounded complete known-provider email domain.
+        const re = /(^|[^A-Z0-9._%+\-@])([A-Z]{3,5}) ([A-Z0-9._%+\-]+)@(gmail\.com|googlemail\.com|yahoo\.com|ymail\.com|hotmail\.com|outlook\.com|aol\.com|icloud\.com|live\.com|msn\.com)(?=$|[^A-Z0-9.-])/gi;
+        for (const hit of header.matchAll(re)) {
+            const left = hit[2].toLowerCase(), right = hit[3].toLowerCase();
+            if (left[0] !== first[0]) continue;
+            // One or two initials followed by exactly two surname letters.
+            const initials = left.slice(0, -2);
+            if (!/^[a-z]{1,2}$/.test(initials) || initials[0] !== first[0]) continue;
+            if (!left.endsWith(last.slice(0, 2)) || !right.startsWith(last.slice(2))) continue;
+            // A full surname must be completed before any numerical/symbol suffix.
+            const afterSurname = right.slice(last.length - 2);
+            if (afterSurname && !/^[0-9._%+\-]/.test(afterSurname)) continue;
+            const candidate = sanitizeEmail(left + right + '@' + hit[4]);
+            if (!isObviousOcrEmailDomainIssue(candidate)) matches.add(candidate);
+        }
+        return matches.size === 1 ? [...matches][0] : null;
+    }
     function frt7FbsplContactConfirmedGapEmail(existingEmail) {
         const existing = sanitizeEmail(String(existingEmail || '').trim());
         if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.(?:com|net|org|edu|gov)$/i.test(existing) ||
@@ -6093,8 +6122,9 @@ function fillNameFieldsWithLoadRetries() {
             }
             const domainGap = headerEmail ? null : frt7FbsplKnownDomainGapEmail();
             const splitNameEmail = (headerEmail || domainGap) ? null : frt7FbsplSplitNameEmail();
-            const nameAnchored = (headerEmail || domainGap || splitNameEmail) ? null : frt7FbsplNameAnchoredGapEmail();
-            const broken = (headerEmail ? [headerEmail] : domainGap ? [domainGap] : splitNameEmail ? [splitNameEmail] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails()).map(candidate => sanitizeEmail(candidate));
+            const initialSurnameGap = (headerEmail || domainGap || splitNameEmail) ? null : frt7FbsplInitialSurnameGapEmail();
+            const nameAnchored = (headerEmail || domainGap || splitNameEmail || initialSurnameGap) ? null : frt7FbsplNameAnchoredGapEmail();
+            const broken = (headerEmail ? [headerEmail] : domainGap ? [domainGap] : splitNameEmail ? [splitNameEmail] : initialSurnameGap ? [initialSurnameGap] : nameAnchored ? [nameAnchored] : frt7FbsplUnstructuredIntactEmails()).map(candidate => sanitizeEmail(candidate));
             const existing = String(emailInput.value || '').trim().toLowerCase();
             if (broken.includes(existing)) {
                 frt7FbsplEmailStatus();
