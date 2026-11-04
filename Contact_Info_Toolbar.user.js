@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.464
+// @version      9.6.465
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4551,6 +4551,55 @@ function fillNameFields(options = {}) {
         : (lateVerifiedName || hybridExtractName(text));
 
     traceAuto("DETECTED", name ? `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)} suffixRepair=${Boolean(name.suffixCurrentFieldRepair)}` : "no candidate");
+
+    // v465 SPLIT WORD-TABLE HEADING GUARD (Auto only):
+    // Word exports can split a surname across adjacent table cells, e.g.
+    // <span>Victor Manuel Ha</span> ... <span>rr Leon</span>.
+    // The rendered-heading parser then proposes the incomplete surname "Ha".
+    // Refuse that replacement only when the document title corroborates the
+    // continuation AND the existing surname is the final title token.
+    // This is a preservation guard, not a new name inference algorithm.
+    if (options.auto && name && !existingNameHasInvalidCharacters &&
+        rawExistingNameBeforeCleanup.first && rawExistingNameBeforeCleanup.last &&
+        !name.suffixCurrentFieldRepair) {
+        try {
+            const iframe = document.querySelector("#divResumeContainer iframe");
+            const iframeDoc = iframe?.contentDocument || iframe?.contentWindow?.document;
+            const html = iframe?.getAttribute("srcdoc") || "";
+            const title = String(iframeDoc?.title ||
+                (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || "")
+                .replace(/\s+/g, " ").trim();
+            const rawHead = String(document.getElementById("txtResumeRaw")?.value || "")
+                .replace(/\s+/g, " ").trim().slice(0, 350);
+            const words = title.split(/\s+/).filter(Boolean);
+            const fold = v => normalizeUnicode(String(v || ""))
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+            const existingFirst = fold(rawExistingNameBeforeCleanup.first);
+            const existingLast = fold(rawExistingNameBeforeCleanup.last);
+            const proposedLast = fold(name.last);
+            const titleFirstMatches = fold(words[0]) === existingFirst;
+            const titleLastMatches = fold(words[words.length - 1]) === existingLast;
+            const titleSurname = words.length >= 3 ? fold(words[words.length - 2]) : "";
+            // Require a proper, nontrivial continuation (not merely a title
+            // containing the candidate as an independent middle name).
+            const continuation = titleSurname.startsWith(proposedLast)
+                ? titleSurname.slice(proposedLast.length) : "";
+            const splitInRaw = continuation.length >= 2 &&
+                new RegExp("\\b" + escapeRegexLiteral(name.last) +
+                    "\\s+" + escapeRegexLiteral(continuation) +
+                    "\\s+" + escapeRegexLiteral(rawExistingNameBeforeCleanup.last) +
+                    "(?=\\s|$)", "i").test(rawHead);
+            if (titleFirstMatches && titleLastMatches &&
+                proposedLast.length >= 2 && continuation.length >= 2 && splitInRaw &&
+                proposedLast !== existingLast) {
+                console.warn(`Toolbar NAME v465: blocked split-table surname fragment "${name.last}"; title confirms "${title}"; preserved ${rawExistingNameBeforeCleanup.first} / ${rawExistingNameBeforeCleanup.last}.`);
+                traceAuto("BLOCK", "split Word-table heading corroborated by document title");
+                return cleanedExisting;
+            }
+        } catch (err) {
+            console.info("Toolbar NAME v465: split-heading check unavailable; leaving existing name rules unchanged.", err);
+        }
+    }
 
     // v420: Preserve an already-correct contact name found together at the
     // beginning of the raw resume (allowing a middle initial).  This guard
