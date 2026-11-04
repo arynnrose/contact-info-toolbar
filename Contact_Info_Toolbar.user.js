@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.466
+// @version      9.6.467
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -2223,9 +2223,15 @@ function isUsableTenDigitPhone(digits) {
                 /^ [A-Z][A-Z&'’\-]{1,30}\b/.test(after);
 
             if (followedByAllCapsPhraseWord) {
-                console.info(
-                    `Toolbar CITY v186: ignored ALL-CAPS "${token}" inside header title phrase.`
-                );
+                // v467: Report each rejected title token only once per applicant.
+                // Keep the actual heading/city detection running unchanged.
+                const cityLogKey = String(getCurrentApplicantId?.() || "unknown") + ":" + token;
+                window.__frt7_city_heading_logs_v467 ||= new Set();
+                if (window.__frt7_city_heading_logs_v467.size > 200) window.__frt7_city_heading_logs_v467.clear();
+                if (!window.__frt7_city_heading_logs_v467.has(cityLogKey)) {
+                    window.__frt7_city_heading_logs_v467.add(cityLogKey);
+                    console.info(`Toolbar CITY v467: ignored ALL-CAPS "${token}" inside header title phrase.`);
+                }
                 continue;
             }
 
@@ -4541,6 +4547,42 @@ function fillNameFields(options = {}) {
                  last: normalizeContactDisplayCase(m[3]),
                  lateVerifiedHeading: true };
     };
+    // v467: A leading street address can precede a separately formatted Word
+    // name heading. Only trust a short, bold+underlined centered paragraph when
+    // its first name matches the contact field AND its surname is independently
+    // corroborated by the explicit contact-header email. No email-only inference.
+    const findAddressPrefixedWordHeading = () => {
+        if (!options.auto || currentLastIsSuffixOnly) return null;
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "");
+        const currentFirst = String(firstInput.value || "").trim();
+        if (!currentFirst || !/^\s*\d{1,6}\s+[A-Za-z][^@\n]{3,90}?\s{2,}/.test(raw.slice(0, 180))) return null;
+        const iframe = document.querySelector("#divResumeContainer iframe");
+        let doc = null;
+        try { doc = iframe?.contentDocument || iframe?.contentWindow?.document; } catch (_) {}
+        if (!doc) return null;
+        const fold = v => normalizeUnicode(String(v || "")).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const candidates = [];
+        for (const p of Array.from(doc.querySelectorAll(".Section1 p, p")).slice(0, 15)) {
+            if (!/center/i.test(p.getAttribute("align") || p.style?.textAlign || "")) continue;
+            if (!p.querySelector("b u, u b")) continue;
+            const heading = String(p.textContent || "").replace(/\s+/g, " ").trim();
+            const m = heading.match(/^([A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,})\s+([A-Za-z]\.)\s+([A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,})$/);
+            if (!m || fold(m[1]) !== fold(currentFirst)) continue;
+            const emailMatch = raw.slice(0, 400).match(/(?:E-?mail(?: address)?\s*:\s*)([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})/i);
+            if (!emailMatch) continue;
+            const local = fold(emailMatch[1]).replace(/[^a-z]/g, "");
+            const last = fold(m[3]).replace(/[^a-z]/g, "");
+            // Require surname as a complete contiguous segment in local part,
+            // with an initial/name prefix (e.g. dmrichmond2025).
+            if (!last || last.length < 3 || !local.includes(last) || local.indexOf(last) < 1) continue;
+            if (!raw.slice(0, 180).includes(heading)) continue;
+            candidates.push({ first: normalizeContactDisplayCase(m[1]), last: normalizeContactDisplayCase(m[3]), verifiedWordHeading: true });
+        }
+        return candidates.length === 1 ? candidates[0] : null;
+    };
+    const addressWordHeading = findAddressPrefixedWordHeading();
+    if (addressWordHeading) console.info(`Toolbar NAME v467: verified centered Word heading + email -> ${addressWordHeading.first} / ${addressWordHeading.last}.`);
+
     const lateVerifiedName = findLateApplicantHeading();
     if (lateVerifiedName) console.info(`Toolbar NAME v425: verified late applicant heading -> ${lateVerifiedName.first} / ${lateVerifiedName.last}.`);
 
@@ -4548,7 +4590,7 @@ function fillNameFields(options = {}) {
         ? (findSurnameBeforeSuffixForCurrentFirst(firstInput.value, text) ||
            findSuffixBoundaryNameFromResumeSources(text) ||
            hybridExtractName(text))
-        : (lateVerifiedName || hybridExtractName(text));
+        : (addressWordHeading || lateVerifiedName || hybridExtractName(text));
 
     traceAuto("DETECTED", name ? `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)} suffixRepair=${Boolean(name.suffixCurrentFieldRepair)}` : "no candidate");
 
