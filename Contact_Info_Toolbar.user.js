@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.467
+// @version      9.6.468
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6229,6 +6229,29 @@ function fillNameFieldsWithLoadRetries() {
                 frt7FbsplEmailStatus();
                 console.info(`Toolbar EMAIL v401: recovered email: "${existing}" -> "${broken[0]}".`);
                 return true;
+            }
+        }
+        // v468: FBSPL/Indeed PDF headers sometimes split a known provider TLD:
+        // chrissyromero90@gmail .com. Repair ONLY a single email in the isolated
+        // contact header, never join unrelated local-part words or alter .edu.
+        if (frt7IsFbsplSource()) {
+            const raw = String(getResumeText() || getIframeResumeTextForRareFallback() || '');
+            const stop = raw.search(/\b(?:Professional summary|Work experience|Work history|Willing to relocate|Education|Skills)\b/i);
+            const header = (stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 1200)).slice(0, 1200);
+            const candidates = [...new Set([...header.matchAll(/(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]+@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\s+\.com)(?=$|[^A-Z0-9.\-])/gi)]
+                .map(m => sanitizeEmail(m[2].replace(/\s+(?=\.com$)/i, '')))
+                .filter(e => /^[a-z0-9._%+\-]+@[a-z0-9-]+\.com$/i.test(e) && !isObviousOcrEmailDomainIssue(e)))];
+            if (candidates.length === 1) {
+                const existing = String(emailInput.value || '').trim().toLowerCase();
+                const confirmed = candidates[0];
+                if (confirmed === existing) { frt7FbsplEmailStatus(); return true; }
+                if (!isManualContactLocked('email', emailInput) &&
+                    !shouldBlockProtectedEmailChange(existing, confirmed)) {
+                    runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                    frt7FbsplEmailStatus();
+                    console.info(`Toolbar EMAIL v468: repaired known-provider space before .com: "${existing}" -> "${confirmed}".`);
+                    return true;
+                }
             }
         }
         // v440: Correct only an isolated known-provider .comm typo in the header.
