@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.468
+// @version      9.6.469
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4711,6 +4711,16 @@ function fillNameFields(options = {}) {
         )
     );
 
+    // v469: Protect an already-entered surname from a filename/iframe candidate
+    // that differs ONLY by one appended S. Do not singularize other names.
+    const existingFirstS = String(firstInput.value || "").trim();
+    const existingLastS = String(lastInput.value || "").trim();
+    if (existingLastS.length >= 2 &&
+        String(name.first || "").toLocaleLowerCase() === existingFirstS.toLocaleLowerCase() &&
+        String(name.last || "").toLocaleLowerCase() === (existingLastS + "s").toLocaleLowerCase()) {
+        console.info(`Toolbar NAME v469: protected existing surname "${existingLastS}" against trailing-S candidate "${name.last}".`);
+        name.last = existingLastS;
+    }
     traceAuto("NORMALIZED CANDIDATE", `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)}`);
     // v398: Do not replace a full first name with the combined initials of
     // the existing first and last names (Domonique Williams -> DW Williams).
@@ -5183,6 +5193,13 @@ function scheduleRenderedNameRefinement() {
         const currentLast = String(lastInput.value || "").trim();
         const proposedFirst = normalizeContactDisplayCase(renderedName.first);
         const proposedLast = applyLearnedMacLastNameCase(enforceSingleLastName(renderedName.last));
+        // v469: Delayed iframe refinement must not bypass trailing-S protection.
+        if (currentLast.length >= 2 &&
+            proposedFirst.toLocaleLowerCase() === currentFirst.toLocaleLowerCase() &&
+            proposedLast.toLocaleLowerCase() === (currentLast + "s").toLocaleLowerCase()) {
+            console.info(`Toolbar NAME v469: blocked delayed trailing-S surname "${currentLast}" -> "${proposedLast}".`);
+            return true;
+        }
         const firstWouldChange = currentFirst !== proposedFirst;
         const lastWouldChange = currentLast !== proposedLast;
         // v321: The delayed iframe refinement also writes directly to fields.
