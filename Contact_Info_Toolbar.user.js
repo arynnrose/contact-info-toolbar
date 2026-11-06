@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.469
+// @version      9.6.470
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -352,6 +352,27 @@ function isObviousOcrEmailDomainIssue(email) {
     return false;
 }
 
+// v470: Strip ONLY a complete verified contact phone (10 digits, 1+10, or +1+10)
+// when it is glued to the start of an otherwise complete email username.
+function frt7StripFullContactPhoneEmailPrefix(value) {
+    const original = String(value || "").trim();
+    const at = original.indexOf("@");
+    if (at < 1) return original;
+    const phoneEl = document.getElementById("txtPhoneDataEntry") || document.getElementById("txtPhone");
+    let digits = String(phoneEl?.value || "").replace(/\D/g, "");
+    if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+    if (!/^[2-9]\d{9}$/.test(digits) || digits.slice(3, 6) === "000") return original;
+    const local = original.slice(0, at);
+    const decorated = digits.split("").join("[\\s()./\\-]*");
+    const match = local.match(new RegExp("^[\\s()./\\-]*(?:\\+?[1][\\s()./\\-]*)?" + decorated + "[\\s()./\\-]*(?=[A-Za-z])", "i"));
+    if (!match) return original;
+    const remaining = local.slice(match[0].length);
+    const repaired = remaining + original.slice(at);
+    if (!/^[A-Za-z][A-Za-z0-9._%+\-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}$/i.test(repaired)) return original;
+    console.info(`Toolbar EMAIL v470: stripped exact contact phone prefix: "${original}" -> "${repaired}".`);
+    return repaired;
+}
+
 function sanitizeEmail(email) {
     if (!email) return email;
 
@@ -441,7 +462,7 @@ function sanitizeEmail(email) {
     }
     // Preserve Apple relay handling, then normalize casing.
     clean = clean.replace(/\.appleid\.com.*$/i, ".appleid.com");
-    return clean.toLowerCase();
+    return frt7StripFullContactPhoneEmailPrefix(clean).toLowerCase();
 }
 
 // v413 UNIVERSAL EMAIL/WEBSITE SEPARATION (ALL SOURCES):
@@ -477,6 +498,31 @@ function frt7RemoveAppendedWebsite(email) {
     }, true);
     // Also catches the site's initial value and later programmatic repaints,
     // which do not necessarily dispatch input/change events.
+    setInterval(repair, 500);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", repair, { once: true });
+    else repair();
+})();
+
+// v470: Existing site contact values can already contain a phone prefix before Auto runs.
+// Repair those values as well; do not wait for a recovered resume candidate.
+(function frt7GuardExistingEmailPhonePrefix() {
+    if (window.top !== window.self) return;
+    let busy = false;
+    function repair() {
+        if (busy) return;
+        const input = document.getElementById("txtEmail");
+        if (!input) return;
+        const before = String(input.value || "");
+        const after = frt7StripFullContactPhoneEmailPrefix(before);
+        if (after === before) return;
+        busy = true;
+        try {
+            input.value = after;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+        } finally { busy = false; }
+    }
+    document.addEventListener("input", e => { if (e.target?.id === "txtEmail" || e.target?.id === "txtPhoneDataEntry" || e.target?.id === "txtPhone") repair(); }, true);
     setInterval(repair, 500);
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", repair, { once: true });
     else repair();
