@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.470
+// @version      9.6.471
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6188,6 +6188,41 @@ function fillNameFieldsWithLoadRetries() {
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
+            // v471: One space immediately AFTER @ in an isolated PDF header
+            // email field, e.g. "alealperez99@ gmail.com". Never concatenate
+            // local-part words, other fields, or arbitrary domain fragments.
+            const rawHeader = String(document.getElementById('txtResumeRaw')?.value ||
+                getResumeText() || getIframeResumeTextForRareFallback() || '').slice(0, 1600)
+                .replace(/[\u00a0\u2007\u202f]/g, ' ');
+            const stopAt = rawHeader.search(/\b(?:Work experience|Work history|Professional summary|Education|Skills|Willing to relocate)\b/i);
+            const contactHeader = stopAt >= 0 ? rawHeader.slice(0, stopAt) : rawHeader.slice(0, 450);
+            const fields = contactHeader.split('|');
+            const known = '(?:gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\\.com';
+            const gapPattern = new RegExp('(^|[^A-Za-z0-9._%+\\-@])([A-Za-z][A-Za-z0-9._%+\\-]*@)[ \t](' + known + ')(?=$|[^A-Za-z0-9.\\-])', 'gi');
+            const intactPattern = /(^|[^A-Za-z0-9._%+\-@])([A-Za-z0-9._%+\-]+@[A-Za-z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Za-z0-9.\-])/gi;
+            const gapMatches = [];
+            const allCandidates = new Set();
+            for (const field of fields.slice(1)) {
+                for (const m of field.matchAll(gapPattern)) {
+                    const candidate = (m[2] + m[3]).toLowerCase();
+                    gapMatches.push(candidate);
+                    allCandidates.add(candidate);
+                }
+                for (const m of field.matchAll(intactPattern)) allCandidates.add(m[2].toLowerCase());
+            }
+            if (gapMatches.length === 1 && allCandidates.size === 1) {
+                const confirmed = gapMatches[0];
+                const existing = String(emailInput.value || '').trim().toLowerCase();
+                if (confirmed === existing) { frt7FbsplEmailStatus(); return true; }
+                if (!isManualContactLocked('email', emailInput) &&
+                    !shouldBlockProtectedEmailChange(existing, confirmed) &&
+                    !isObviousOcrEmailDomainIssue(confirmed)) {
+                    runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                    frt7FbsplEmailStatus();
+                    console.info(`Toolbar EMAIL v471: repaired single space after @ in isolated header: "${existing}" -> "${confirmed}".`);
+                    return true;
+                }
+            }
             // v458: PDF/Word resumes can prepend the *verified contact phone*
             // directly to the real email. The CSS/Word header may exceed the
             // short windows used by the ordinary FBSPL extractors. Only repair
