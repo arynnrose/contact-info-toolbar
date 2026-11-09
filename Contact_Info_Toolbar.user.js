@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.471
+// @version      9.6.472
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6188,25 +6188,33 @@ function fillNameFieldsWithLoadRetries() {
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
-            // v471: One space immediately AFTER @ in an isolated PDF header
-            // email field, e.g. "alealperez99@ gmail.com". Never concatenate
-            // local-part words, other fields, or arbitrary domain fragments.
+            // v472: Repair exactly one PDF whitespace gap in a known-provider email
+            // field: after @, after the domain dot, or inside a known provider.
+            // Require one isolated pipe-delimited header candidate; never join
+            // unrelated words, phone numbers, ZIPs, or unknown domains.
             const rawHeader = String(document.getElementById('txtResumeRaw')?.value ||
                 getResumeText() || getIframeResumeTextForRareFallback() || '').slice(0, 1600)
                 .replace(/[\u00a0\u2007\u202f]/g, ' ');
             const stopAt = rawHeader.search(/\b(?:Work experience|Work history|Professional summary|Education|Skills|Willing to relocate)\b/i);
             const contactHeader = stopAt >= 0 ? rawHeader.slice(0, stopAt) : rawHeader.slice(0, 450);
             const fields = contactHeader.split('|');
-            const known = '(?:gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\\.com';
-            const gapPattern = new RegExp('(^|[^A-Za-z0-9._%+\\-@])([A-Za-z][A-Za-z0-9._%+\\-]*@)[ \t](' + known + ')(?=$|[^A-Za-z0-9.\\-])', 'gi');
+            const providers = '(?:gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)';
+            const gapPatterns = [
+                new RegExp('(^|[^A-Za-z0-9._%+\\-@])([A-Za-z][A-Za-z0-9._%+\\-]*@)[ \t](' + providers + '\\.com)(?=$|[^A-Za-z0-9.\\-])', 'gi'),
+                new RegExp('(^|[^A-Za-z0-9._%+\\-@])([A-Za-z][A-Za-z0-9._%+\\-]*@' + providers + '\\.)[ \t](com)(?=$|[^A-Za-z0-9.\\-])', 'gi'),
+                new RegExp('(^|[^A-Za-z0-9._%+\\-@])([A-Za-z][A-Za-z0-9._%+\\-]*@)([A-Za-z]+)[ \t]([A-Za-z]+\\.com)(?=$|[^A-Za-z0-9.\\-])', 'gi')
+            ];
             const intactPattern = /(^|[^A-Za-z0-9._%+\-@])([A-Za-z0-9._%+\-]+@[A-Za-z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Za-z0-9.\-])/gi;
             const gapMatches = [];
             const allCandidates = new Set();
             for (const field of fields.slice(1)) {
-                for (const m of field.matchAll(gapPattern)) {
-                    const candidate = (m[2] + m[3]).toLowerCase();
-                    gapMatches.push(candidate);
-                    allCandidates.add(candidate);
+                for (let i = 0; i < gapPatterns.length; i++) {
+                    for (const m of field.matchAll(gapPatterns[i])) {
+                        const candidate = (i === 2 ? m[2] + m[3] + m[4] : m[2] + m[3]).toLowerCase();
+                        if (!new RegExp('^[a-z][a-z0-9._%+\\-]*@' + providers + '\\.com$', 'i').test(candidate)) continue;
+                        gapMatches.push(candidate);
+                        allCandidates.add(candidate);
+                    }
                 }
                 for (const m of field.matchAll(intactPattern)) allCandidates.add(m[2].toLowerCase());
             }
@@ -6219,7 +6227,7 @@ function fillNameFieldsWithLoadRetries() {
                     !isObviousOcrEmailDomainIssue(confirmed)) {
                     runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
                     frt7FbsplEmailStatus();
-                    console.info(`Toolbar EMAIL v471: repaired single space after @ in isolated header: "${existing}" -> "${confirmed}".`);
+                    console.info(`Toolbar EMAIL v472: repaired isolated known-provider header gap: "${existing}" -> "${confirmed}".`);
                     return true;
                 }
             }
