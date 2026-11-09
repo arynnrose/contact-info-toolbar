@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.472
+// @version      9.6.473
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17218,6 +17218,44 @@ if (pinBtn) {
         }
         throw new Error('Remote row safety limit exceeded');
     }
+    // v473: Auto Sync keeps a session-local remote snapshot and requests only rows
+    // updated since the previous successful poll. Tombstones remain rows, so deletes
+    // propagate. A failed delta never advances the watermark.
+    let autoRemoteCache = null;
+    let autoRemoteWatermark = null;
+    async function fetchAutoRemote(t) {
+        if (autoRemoteCache === null) {
+            const full = await fetchRemote(t);
+            autoRemoteCache = full;
+            autoRemoteWatermark = new Date().toISOString();
+            return new Map(full);
+        }
+        // Overlap protects rows committed near the boundary and timestamp precision.
+        const since = new Date(Math.max(0,Date.parse(autoRemoteWatermark)-10000)).toISOString();
+        const startWatermark = new Date().toISOString();
+        const next = new Map(autoRemoteCache);
+        for (let offset=0; offset<100000; offset+=500) {
+            const path='/rest/v1/toolbar_shared_items?select=category,item_key,item_value,deleted,updated_at'+
+                '&updated_at=gte.'+encodeURIComponent(since)+
+                '&order=updated_at.asc,category.asc,item_key.asc&limit=500&offset='+offset;
+            const r=await request('GET',path,null,t);
+            if (!Array.isArray(r.data)) throw new Error('Unexpected incremental sync response');
+            for (const row of r.data) next.set(row.category+'\u0000'+row.item_key,row);
+            if (r.data.length<500) {
+                autoRemoteCache=next;
+                autoRemoteWatermark=startWatermark;
+                return new Map(next);
+            }
+        }
+        throw new Error('Incremental sync safety limit exceeded');
+    }
+    async function fetchSingleRemote(t,category,key) {
+        const path='/rest/v1/toolbar_shared_items?select=category,item_key,item_value,deleted,updated_at'+
+            '&category=eq.'+encodeURIComponent(category)+'&item_key=eq.'+encodeURIComponent(key)+'&limit=1';
+        const r=await request('GET',path,null,t);
+        if (!Array.isArray(r.data)) throw new Error('Unexpected verification response');
+        return r.data[0] || null;
+    }
     function flatten(data) {
         const out = new Map();
         for (const cat of Object.keys(CATEGORIES)) for (const [k,v] of Object.entries(data[cat]||{})) out.set(cat+'\u0000'+k,{category:cat,item_key:k,item_value:v,deleted:v?.deleted===true});
@@ -17719,7 +17757,7 @@ if (pinBtn) {
             set(AUTO_NEW_ENABLED_KEY,true);
             if (get(AUTO_BASELINE_KEY,null)===null) set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
             set('enabled',false); // legacy sync remains disabled
-            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town/area-code deletions sync; new entries and safe downloads continue every 30 seconds.');
+            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town/area-code deletions sync; new entries and safe downloads continue every 2 minutes.');
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
         finally {busy=false;}
     }
@@ -18026,7 +18064,7 @@ if (pinBtn) {
         autoNewBusy=true;busy=true;
         try {
             const t=await token();await authorized(t);
-            let remote=await fetchRemote(t);
+            let remote=await fetchAutoRemote(t);
             await flushActivity(t);
             if (!remote.size) throw new Error('Remote database is empty');
             const pending=parse(get(AUTO_OUTBOX_KEY,'{}'));
@@ -18059,8 +18097,8 @@ if (pinBtn) {
                     await request('POST','/rest/v1/toolbar_shared_items?select=category,item_key',
                         payload,t,{'Prefer':'return=representation'});
                 }
-                remote=await fetchRemote(t);
-                const confirmed=remote.get(id);
+                const confirmed=await fetchSingleRemote(t,change.category,change.item_key);
+                if (confirmed) { remote.set(id,confirmed); if (autoRemoteCache) autoRemoteCache.set(id,confirmed); }
                 if (!confirmed || !sameMeaning(confirmed.item_value,payload.item_value) ||
                     isDeleted(confirmed)!==!!payload.deleted)
                     throw new Error('Shared write did not verify for '+change.item_key);
@@ -18319,7 +18357,7 @@ if (pinBtn) {
     if (get(AUTO_NEW_ENABLED_KEY,false) && get(AUTO_BASELINE_KEY,null)===null)
         set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
     setInterval(observeLocalChanges,1000);
-    setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},30000);
+    setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},120000);
     console.info('Toolbar v363 team sync available via Tampermonkey menu (OFF by default).');
 })();
 // ===== END TEAM SYNC BRIDGE =====
