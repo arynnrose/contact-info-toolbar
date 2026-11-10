@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.477
+// @version      9.6.478
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17821,9 +17821,9 @@ if (pinBtn) {
             set(AUTO_NEW_ENABLED_KEY,true);
             if (get(AUTO_BASELINE_KEY,null)===null) set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
             set('enabled',false); // legacy sync remains disabled
-            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town/area-code deletions sync; new entries and safe downloads continue every 2 minutes.');
+            say('Safe automatic sync ON: current '+local.size+' local entries are the starting snapshot. Existing backlog and conflicts stay protected. Only future explicit name/town/area-code deletions sync; new entries and safe downloads continue hourly.');
         } catch(e) {set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync not enabled: '+e.message);}
-        finally {busy=false;}
+        finally {busy=false;setTimeout(runAutoSyncIfDue,1000);}
     }
     // v386: Per-computer conflict diagnostics. Read-only; never resolves or overwrites.
     const CONFLICT_REPORT_KEY='safe_sync_conflict_report_v386';
@@ -18066,6 +18066,10 @@ if (pinBtn) {
     // displayed live while the Team Sync dialog remains open.
     const LAST_AUTO_SYNC_KEY = 'last_auto_sync_success_v388';
     const LAST_AUTO_SYNC_ERROR_KEY = 'last_auto_sync_error_v388';
+    // v478: Hourly schedule, with a bounded retry for failed attempts.
+    const AUTO_SYNC_INTERVAL_MS = 60 * 60 * 1000;
+    const AUTO_SYNC_RETRY_MS = 5 * 60 * 1000;
+    const LAST_AUTO_SYNC_ATTEMPT_KEY = 'last_auto_sync_attempt_v478';
     function renderLastAutoSync() {
         if (!panel?.isConnected) return;
         const el=panel.querySelector('[data-last-auto-sync]');
@@ -18079,7 +18083,10 @@ if (pinBtn) {
             line='Last successful auto sync: '+new Date(stamp).toLocaleTimeString()+' ('+ago+')';
         }
         const problem=String(get(LAST_AUTO_SYNC_ERROR_KEY,'')||'');
-        el.textContent=line+(autoNewBusy?' · Syncing now…':enabled?' · Auto sync ON':' · Auto sync OFF')+
+        const lastAttempt=Number(get(LAST_AUTO_SYNC_ATTEMPT_KEY,0))||0;
+        const dueAt=problem && lastAttempt>stamp ? lastAttempt+AUTO_SYNC_RETRY_MS : stamp+AUTO_SYNC_INTERVAL_MS;
+        const next=enabled && !autoNewBusy ? ' · Next check '+(dueAt<=Date.now()?'due now':new Date(dueAt).toLocaleTimeString()) : '';
+        el.textContent=line+(autoNewBusy?' · Syncing now…':enabled?' · Auto sync ON (hourly)':' · Auto sync OFF')+next+
             (problem?' · Last error: '+problem:'');
         el.style.color=problem?'#ffd58a':'#bde8c8';
     }
@@ -18125,6 +18132,7 @@ if (pinBtn) {
     async function autoNewTick() {
         if (busy || autoNewBusy || !get(AUTO_NEW_ENABLED_KEY,false)) return;
         observeLocalChanges();
+        set(LAST_AUTO_SYNC_ATTEMPT_KEY,Date.now());
         autoNewBusy=true;busy=true;
         try {
             const t=await token();await authorized(t);
@@ -18318,7 +18326,7 @@ if (pinBtn) {
           <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
           <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor — daily &amp; monthly (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
           <hr>
-          <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every 30 seconds)</b></label>
+          <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every hour)</b></label>
           <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
           <div class="activity" data-conflict-report hidden></div>
           <label class="field">This computer's log name (future entries)<input data-device-label type="text" maxlength="60" placeholder="e.g. Main PC"></label>
@@ -18425,7 +18433,21 @@ if (pinBtn) {
     if (get(AUTO_NEW_ENABLED_KEY,false) && get(AUTO_BASELINE_KEY,null)===null)
         set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
     setInterval(observeLocalChanges,1000);
-    setInterval(()=>{if(get(AUTO_NEW_ENABLED_KEY,false))void autoNewTick();},120000);
+    // v478: Run only when due; a backgrounded/suspended browser may miss timers.
+    // Re-check on focus/visibility and shortly after startup, without extra network
+    // traffic between due times. A failed check retries after five minutes.
+    function runAutoSyncIfDue() {
+        if (!get(AUTO_NEW_ENABLED_KEY,false) || busy || autoNewBusy) return;
+        const success=Number(get(LAST_AUTO_SYNC_KEY,0))||0;
+        const attempt=Number(get(LAST_AUTO_SYNC_ATTEMPT_KEY,0))||0;
+        const error=String(get(LAST_AUTO_SYNC_ERROR_KEY,'')||'');
+        const due=error && attempt>success ? attempt+AUTO_SYNC_RETRY_MS : success+AUTO_SYNC_INTERVAL_MS;
+        if (Date.now()>=due) void autoNewTick();
+    }
+    setInterval(runAutoSyncIfDue,30000);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)runAutoSyncIfDue();});
+    window.addEventListener('focus',runAutoSyncIfDue);
+    setTimeout(runAutoSyncIfDue,5000);
     console.info('Toolbar v363 team sync available via Tampermonkey menu (OFF by default).');
 })();
 // ===== END TEAM SYNC BRIDGE =====
