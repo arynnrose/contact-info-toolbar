@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.475
+// @version      9.6.476
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -18379,8 +18379,12 @@ if (pinBtn) {
                     ? 'Automatic sync OFF (local data only)'
                     : status;
         renderLastAutoSync();
-        renderBandwidth();
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
+        try { renderBandwidth(); } catch (err) {
+            const monitor=panel.querySelector('[data-bandwidth]');
+            if(monitor) monitor.textContent="Bandwidth monitor error: "+String(err?.message||err);
+            console.error("Toolbar bandwidth render error",err);
+        }
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
         panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
@@ -18397,6 +18401,7 @@ if (pinBtn) {
         panel.querySelector('[data-activity-open]').onclick=()=>void showSharedActivity();
         const labelInput=panel.querySelector('[data-device-label]');
         labelInput.value=deviceLabel();
+        // Preserve the existing device name even if bandwidth rendering fails.
         const labelStatus=panel.querySelector('[data-device-save-status]');
         let labelSaveTimer=null;
         const saveDeviceLabel=()=>{
@@ -18415,6 +18420,8 @@ if (pinBtn) {
         labelInput.addEventListener('blur',saveDeviceLabel);
         labelInput.addEventListener('change',saveDeviceLabel);
         labelStatus.textContent='Current name: '+deviceLabel();
+        // Keep checkbox consistent with the persisted auto-sync setting.
+        panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected){panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);renderLastAutoSync();}});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');renderLastAutoSync();}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
