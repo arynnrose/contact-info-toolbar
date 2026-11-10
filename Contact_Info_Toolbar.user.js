@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.474
+// @version      9.6.475
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17162,29 +17162,62 @@ if (pinBtn) {
         // Notify the Settings owner instead of accessing its private variables.
         window.dispatchEvent(new Event('frt7:team-sync-data-updated'));
     }
-    // v474: Local-only transfer accounting. No telemetry is uploaded.
+    // v475: Local-only daily/monthly bandwidth history, preserving v474 counters.
     const BANDWIDTH_KEY='bandwidth_monitor_v474';
-    const bandwidthToday=()=>new Date().toLocaleDateString('en-CA');
+    const BANDWIDTH_HISTORY_KEY='bandwidth_history_v475';
+    const bandwidthToday=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+    const bandwidthFields=['received','sent','requests','fullRows','deltaRows','deltaRequests','fullRequests','estimatedAvoided'];
+    function emptyBandwidth(day) {return {day,received:0,sent:0,requests:0,fullRows:0,deltaRows:0,deltaRequests:0,fullRequests:0,estimatedAvoided:0,lastType:'None',lastRows:0,lastAt:''};}
+    function bandwidthHistory() {const h=parse(get(BANDWIDTH_HISTORY_KEY,'{}'));return h;}
+    function persistBandwidthDay(state) {
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(String(state.day||'')))return;
+        const h=bandwidthHistory();
+        // Preserve the last 24 months of daily data without any network calls.
+        const cutoff=new Date();cutoff.setMonth(cutoff.getMonth()-24);
+        const minDay=cutoff.getFullYear()+'-'+String(cutoff.getMonth()+1).padStart(2,'0')+'-'+String(cutoff.getDate()).padStart(2,'0');
+        h[state.day]=Object.fromEntries(bandwidthFields.map(k=>[k,Number(state[k])||0]));
+        for(const day of Object.keys(h))if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||day<minDay)delete h[day];
+        set(BANDWIDTH_HISTORY_KEY,JSON.stringify(h));
+    }
     function bandwidthState() {
+        const today=bandwidthToday();
         const raw=parse(get(BANDWIDTH_KEY,'{}'));
-        return raw.day===bandwidthToday()?raw:{day:bandwidthToday(),received:0,sent:0,requests:0,fullRows:0,deltaRows:0,deltaRequests:0,fullRequests:0,estimatedAvoided:0,lastType:'None',lastRows:0,lastAt:''};
+        if(raw.day && raw.day!==today)persistBandwidthDay(raw);
+        if(raw.day===today)return raw;
+        const prior=bandwidthHistory()[today];
+        return {...emptyBandwidth(today),...(prior||{})};
     }
     function byteLength(value) { return new TextEncoder().encode(String(value||'')).length; }
     function updateBandwidth(patch) {
         const state=bandwidthState();
         for (const [k,v] of Object.entries(patch)) state[k]=(typeof v==='number' ? (Number(state[k])||0)+v : v);
         set(BANDWIDTH_KEY,JSON.stringify(state));
+        persistBandwidthDay(state);
         renderBandwidth();
     }
     function renderBandwidth() {
         const node=panel?.querySelector('[data-bandwidth]');if(!node)return;
         const b=bandwidthState();
-        const fmt=n=>n>=1048576?(n/1048576).toFixed(2)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':n+' B';
-        const percent=b.estimatedAvoided>0 ? Math.round(100*b.estimatedAvoided/(b.estimatedAvoided+b.received))+'%' : 'Not enough data';
-        node.textContent='Today — downloaded: '+fmt(b.received)+' | uploaded: '+fmt(b.sent)+'\n'+
-            'Requests: '+b.requests+' | full pages: '+b.fullRequests+' | incremental pages: '+b.deltaRequests+'\n'+
+        // Migrate the current v474 day's totals on first opening v475.
+        persistBandwidthDay(b);
+        const history=bandwidthHistory();
+        const fmt=n=>n>=1048576?(n/1048576).toFixed(2)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':Math.round(n)+' B';
+        const fmtPeriod=key=>{
+            const t=Object.fromEntries(bandwidthFields.map(f=>[f,0]));
+            for(const [day,values] of Object.entries(history))if(day.startsWith(key))for(const f of bandwidthFields)t[f]+=Number(values[f])||0;
+            return t;
+        };
+        const month=b.day.slice(0,7);
+        const prev=new Date(Number(month.slice(0,4)),Number(month.slice(5,7))-2,1);
+        const prevMonth=prev.getFullYear()+'-'+String(prev.getMonth()+1).padStart(2,'0');
+        const curr=fmtPeriod(month),last=fmtPeriod(prevMonth);
+        const periodLine=(label,x)=>label+': downloaded '+fmt(x.received)+' | uploaded '+fmt(x.sent)+' | requests '+x.requests+' | estimated avoided '+fmt(x.estimatedAvoided);
+        const months=Object.keys(history).map(x=>x.slice(0,7)).filter((x,i,a)=>a.indexOf(x)===i).sort().reverse().slice(0,12);
+        node.textContent=periodLine('Today',b)+'\n'+periodLine('This month ('+month+')',curr)+'\n'+periodLine('Last month ('+prevMonth+')',last)+'\n'+
+            'Requests today: '+b.requests+' | full pages: '+b.fullRequests+' | incremental pages: '+b.deltaRequests+'\n'+
             'Last shared-data check: '+b.lastType+' ('+b.lastRows+' rows)'+(b.lastAt?' at '+b.lastAt:'')+'\n'+
-            'Estimated data avoided by incremental reads: '+fmt(b.estimatedAvoided)+' (approximate; not Supabase billing)';
+            'Monthly history (most recent first):\n'+(months.length?months.map(m=>'  '+periodLine(m,fmtPeriod(m))).join('\n'):'  No history yet')+'\n'+
+            'Monthly totals are measured locally on this computer starting with v474; earlier usage cannot be recovered.';
     }
     function request(method, path, body, token, headers = {}) {
         const sentBytes=body?byteLength(JSON.stringify(body)):0;
@@ -18284,7 +18317,7 @@ if (pinBtn) {
           <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
           <div class="status" data-sync-status></div>
           <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
-          <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
+          <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor — daily & monthly (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every 30 seconds)</b></label>
           <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
