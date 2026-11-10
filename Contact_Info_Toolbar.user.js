@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.473
+// @version      9.6.474
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17162,12 +17162,38 @@ if (pinBtn) {
         // Notify the Settings owner instead of accessing its private variables.
         window.dispatchEvent(new Event('frt7:team-sync-data-updated'));
     }
+    // v474: Local-only transfer accounting. No telemetry is uploaded.
+    const BANDWIDTH_KEY='bandwidth_monitor_v474';
+    const bandwidthToday=()=>new Date().toLocaleDateString('en-CA');
+    function bandwidthState() {
+        const raw=parse(get(BANDWIDTH_KEY,'{}'));
+        return raw.day===bandwidthToday()?raw:{day:bandwidthToday(),received:0,sent:0,requests:0,fullRows:0,deltaRows:0,deltaRequests:0,fullRequests:0,estimatedAvoided:0,lastType:'None',lastRows:0,lastAt:''};
+    }
+    function byteLength(value) { return new TextEncoder().encode(String(value||'')).length; }
+    function updateBandwidth(patch) {
+        const state=bandwidthState();
+        for (const [k,v] of Object.entries(patch)) state[k]=(typeof v==='number' ? (Number(state[k])||0)+v : v);
+        set(BANDWIDTH_KEY,JSON.stringify(state));
+        renderBandwidth();
+    }
+    function renderBandwidth() {
+        const node=panel?.querySelector('[data-bandwidth]');if(!node)return;
+        const b=bandwidthState();
+        const fmt=n=>n>=1048576?(n/1048576).toFixed(2)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':n+' B';
+        const percent=b.estimatedAvoided>0 ? Math.round(100*b.estimatedAvoided/(b.estimatedAvoided+b.received))+'%' : 'Not enough data';
+        node.textContent='Today — downloaded: '+fmt(b.received)+' | uploaded: '+fmt(b.sent)+'\n'+
+            'Requests: '+b.requests+' | full pages: '+b.fullRequests+' | incremental pages: '+b.deltaRequests+'\n'+
+            'Last shared-data check: '+b.lastType+' ('+b.lastRows+' rows)'+(b.lastAt?' at '+b.lastAt:'')+'\n'+
+            'Estimated data avoided by incremental reads: '+fmt(b.estimatedAvoided)+' (approximate; not Supabase billing)';
+    }
     function request(method, path, body, token, headers = {}) {
+        const sentBytes=body?byteLength(JSON.stringify(body)):0;
         return new Promise((resolve,reject) => GM_xmlhttpRequest({
             method, url: URL + path, timeout: 30000,
             headers: { apikey: KEY, ...(token ? {Authorization:'Bearer '+token} : {}), ...(body ? {'Content-Type':'application/json'} : {}), ...headers },
             data: body ? JSON.stringify(body) : undefined,
             onload: r => {
+                updateBandwidth({requests:1,received:byteLength(r.responseText||''),sent:sentBytes});
                 let result; try { result = JSON.parse(r.responseText || 'null'); } catch (_) { result = r.responseText; }
                 // Report safe HTTP diagnostics in the Team Sync status itself.
                 // Never display authorization headers, passwords, access tokens, or uploaded values.
@@ -17211,6 +17237,7 @@ if (pinBtn) {
         const all = new Map();
         for (let offset=0; offset<100000; offset+=500) {
             const r = await request('GET','/rest/v1/toolbar_shared_items?select=category,item_key,item_value,deleted,updated_at&order=category.asc,item_key.asc&limit=500&offset='+offset,null,t);
+            updateBandwidth({fullRequests:1,fullRows:Array.isArray(r.data)?r.data.length:0});
             const rows = r.data;
             if (!Array.isArray(rows)) throw new Error('Unexpected database response');
             for (const row of rows) all.set(row.category+'\u0000'+row.item_key,row);
@@ -17228,18 +17255,23 @@ if (pinBtn) {
             const full = await fetchRemote(t);
             autoRemoteCache = full;
             autoRemoteWatermark = new Date().toISOString();
+            updateBandwidth({lastType:'Full',lastRows:full.size,lastAt:new Date().toLocaleTimeString()});
             return new Map(full);
         }
         // Overlap protects rows committed near the boundary and timestamp precision.
         const since = new Date(Math.max(0,Date.parse(autoRemoteWatermark)-10000)).toISOString();
         const startWatermark = new Date().toISOString();
         const next = new Map(autoRemoteCache);
+        let deltaCount=0;
         for (let offset=0; offset<100000; offset+=500) {
             const path='/rest/v1/toolbar_shared_items?select=category,item_key,item_value,deleted,updated_at'+
                 '&updated_at=gte.'+encodeURIComponent(since)+
                 '&order=updated_at.asc,category.asc,item_key.asc&limit=500&offset='+offset;
             const r=await request('GET',path,null,t);
             if (!Array.isArray(r.data)) throw new Error('Unexpected incremental sync response');
+            deltaCount+=r.data.length;
+            const baselineBytes=byteLength(JSON.stringify([...autoRemoteCache.values()]));
+            updateBandwidth({deltaRequests:1,deltaRows:r.data.length,estimatedAvoided:Math.max(0,baselineBytes-byteLength(r.data)),lastType:'Incremental',lastRows:deltaCount,lastAt:new Date().toLocaleTimeString()});
             for (const row of r.data) next.set(row.category+'\u0000'+row.item_key,row);
             if (r.data.length<500) {
                 autoRemoteCache=next;
@@ -17721,7 +17753,7 @@ if (pinBtn) {
                 : 'All locally recorded log events uploaded and verified.';
             container.appendChild(diag);
             const heading=document.createElement('div');
-            heading.textContent='Shared activity — newest 100 events (local time)';
+            heading.textContent='Shared activity — newest 100 record events (local time; downloads show the receiving computer, not the original creator; routine sync checks are not logged)';
             heading.style.fontWeight='bold';container.appendChild(heading);
             if (!response.data.length) {
                 const empty=document.createElement('p');
@@ -18252,6 +18284,7 @@ if (pinBtn) {
           <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
           <div class="status" data-sync-status></div>
           <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
+          <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every 30 seconds)</b></label>
           <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
@@ -18313,6 +18346,7 @@ if (pinBtn) {
                     ? 'Automatic sync OFF (local data only)'
                     : status;
         renderLastAutoSync();
+        renderBandwidth();
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
         panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
