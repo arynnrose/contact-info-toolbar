@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.476
+// @version      9.6.477
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17162,62 +17162,61 @@ if (pinBtn) {
         // Notify the Settings owner instead of accessing its private variables.
         window.dispatchEvent(new Event('frt7:team-sync-data-updated'));
     }
-    // v475: Local-only daily/monthly bandwidth history, preserving v474 counters.
+    // v477: Bandwidth accounting built directly on the known v474 baseline.
+    // Only local Tampermonkey storage is used; no additional network calls.
     const BANDWIDTH_KEY='bandwidth_monitor_v474';
-    const BANDWIDTH_HISTORY_KEY='bandwidth_history_v475';
+    const BANDWIDTH_HISTORY_KEY='bandwidth_history_v477';
     const bandwidthToday=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
-    const bandwidthFields=['received','sent','requests','fullRows','deltaRows','deltaRequests','fullRequests','estimatedAvoided'];
-    function emptyBandwidth(day) {return {day,received:0,sent:0,requests:0,fullRows:0,deltaRows:0,deltaRequests:0,fullRequests:0,estimatedAvoided:0,lastType:'None',lastRows:0,lastAt:''};}
-    function bandwidthHistory() {const h=parse(get(BANDWIDTH_HISTORY_KEY,'{}'));return h;}
-    function persistBandwidthDay(state) {
-        if(!/^\d{4}-\d{2}-\d{2}$/.test(String(state.day||'')))return;
-        const h=bandwidthHistory();
-        // Preserve the last 24 months of daily data without any network calls.
-        const cutoff=new Date();cutoff.setMonth(cutoff.getMonth()-24);
-        const minDay=cutoff.getFullYear()+'-'+String(cutoff.getMonth()+1).padStart(2,'0')+'-'+String(cutoff.getDate()).padStart(2,'0');
-        h[state.day]=Object.fromEntries(bandwidthFields.map(k=>[k,Number(state[k])||0]));
-        for(const day of Object.keys(h))if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||day<minDay)delete h[day];
-        set(BANDWIDTH_HISTORY_KEY,JSON.stringify(h));
-    }
+    const bandwidthBlank=day=>({day,received:0,sent:0,requests:0,fullRows:0,deltaRows:0,deltaRequests:0,fullRequests:0,estimatedAvoided:0,lastType:'None',lastRows:0,lastAt:''});
     function bandwidthState() {
-        const today=bandwidthToday();
         const raw=parse(get(BANDWIDTH_KEY,'{}'));
-        if(raw.day && raw.day!==today)persistBandwidthDay(raw);
-        if(raw.day===today)return raw;
-        const prior=bandwidthHistory()[today];
-        return {...emptyBandwidth(today),...(prior||{})};
+        return raw.day===bandwidthToday()?raw:bandwidthBlank(bandwidthToday());
+    }
+    function bandwidthHistory() {
+        const history=parse(get(BANDWIDTH_HISTORY_KEY,'{}'));
+        const old=parse(get(BANDWIDTH_KEY,'{}'));
+        // Preserve v474 counters on first upgrade, including the current day.
+        if (old.day && /^\d{4}-\d{2}-\d{2}$/.test(old.day) && !history[old.day]) history[old.day]=old;
+        return history;
     }
     function byteLength(value) { return new TextEncoder().encode(String(value||'')).length; }
     function updateBandwidth(patch) {
-        const state=bandwidthState();
-        for (const [k,v] of Object.entries(patch)) state[k]=(typeof v==='number' ? (Number(state[k])||0)+v : v);
-        set(BANDWIDTH_KEY,JSON.stringify(state));
-        persistBandwidthDay(state);
-        renderBandwidth();
+        try {
+            const state=bandwidthState();
+            for (const [k,v] of Object.entries(patch)) state[k]=(typeof v==='number' ? (Number(state[k])||0)+v : v);
+            set(BANDWIDTH_KEY,JSON.stringify(state));
+            const history=bandwidthHistory();
+            history[state.day]=state;
+            // Retain approximately 24 months of daily totals.
+            const days=Object.keys(history).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+            for(const day of days.slice(0,Math.max(0,days.length-730)))delete history[day];
+            set(BANDWIDTH_HISTORY_KEY,JSON.stringify(history));
+            renderBandwidth();
+        } catch(e) { console.warn('[Toolbar Bandwidth] Accounting error:',e); }
     }
     function renderBandwidth() {
         const node=panel?.querySelector('[data-bandwidth]');if(!node)return;
-        const b=bandwidthState();
-        // Migrate the current v474 day's totals on first opening v475.
-        persistBandwidthDay(b);
-        const history=bandwidthHistory();
-        const fmt=n=>n>=1048576?(n/1048576).toFixed(2)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':Math.round(n)+' B';
-        const fmtPeriod=key=>{
-            const t=Object.fromEntries(bandwidthFields.map(f=>[f,0]));
-            for(const [day,values] of Object.entries(history))if(day.startsWith(key))for(const f of bandwidthFields)t[f]+=Number(values[f])||0;
-            return t;
-        };
-        const month=b.day.slice(0,7);
-        const prev=new Date(Number(month.slice(0,4)),Number(month.slice(5,7))-2,1);
-        const prevMonth=prev.getFullYear()+'-'+String(prev.getMonth()+1).padStart(2,'0');
-        const curr=fmtPeriod(month),last=fmtPeriod(prevMonth);
-        const periodLine=(label,x)=>label+': downloaded '+fmt(x.received)+' | uploaded '+fmt(x.sent)+' | requests '+x.requests+' | estimated avoided '+fmt(x.estimatedAvoided);
-        const months=Object.keys(history).map(x=>x.slice(0,7)).filter((x,i,a)=>a.indexOf(x)===i).sort().reverse().slice(0,12);
-        node.textContent=periodLine('Today',b)+'\n'+periodLine('This month ('+month+')',curr)+'\n'+periodLine('Last month ('+prevMonth+')',last)+'\n'+
-            'Requests today: '+b.requests+' | full pages: '+b.fullRequests+' | incremental pages: '+b.deltaRequests+'\n'+
-            'Last shared-data check: '+b.lastType+' ('+b.lastRows+' rows)'+(b.lastAt?' at '+b.lastAt:'')+'\n'+
-            'Monthly history (most recent first):\n'+(months.length?months.map(m=>'  '+periodLine(m,fmtPeriod(m))).join('\n'):'  No history yet')+'\n'+
-            'Monthly totals are measured locally on this computer starting with v474; earlier usage cannot be recovered.';
+        try {
+            const b=bandwidthState(), history=bandwidthHistory();
+            const fmt=n=>{n=Number(n)||0;return n>=1048576?(n/1048576).toFixed(2)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':Math.round(n)+' B';};
+            const month=bandwidthToday().slice(0,7);
+            const monthly={};
+            for(const [day,record] of Object.entries(history)) {
+                if(!/^\d{4}-\d{2}-\d{2}$/.test(day))continue;
+                const m=day.slice(0,7);
+                const sum=monthly[m]||(monthly[m]={received:0,sent:0,requests:0,estimatedAvoided:0});
+                for(const key of Object.keys(sum))sum[key]+=Number(record[key])||0;
+            }
+            const current=monthly[month]||{received:0,sent:0,requests:0,estimatedAvoided:0};
+            const previousDate=new Date(Number(month.slice(0,4)),Number(month.slice(5,7))-2,1);
+            const prev=previousDate.getFullYear()+'-'+String(previousDate.getMonth()+1).padStart(2,'0');
+            const previous=monthly[prev]||{received:0,sent:0,requests:0,estimatedAvoided:0};
+            const describe=(label,x)=>label+': downloaded '+fmt(x.received)+' | uploaded '+fmt(x.sent)+' | requests '+(x.requests||0)+' | estimated avoided '+fmt(x.estimatedAvoided);
+            const months=Object.keys(monthly).sort().reverse().slice(0,12);
+            node.textContent=describe('Today',b)+'\n'+describe('This month ('+month+')',current)+'\n'+describe('Last month ('+prev+')',previous)+'\n'+
+                'Last shared-data check: '+(b.lastType||'None')+' ('+(b.lastRows||0)+' rows)'+(b.lastAt?' at '+b.lastAt:'')+'\n'+
+                'Monthly history (available measurements only):\n'+(months.length?months.map(m=>describe(m,monthly[m])).join('\n'):'No recorded usage yet');
+        } catch(e) { node.textContent='Bandwidth display error: '+String(e?.message||e); }
     }
     function request(method, path, body, token, headers = {}) {
         const sentBytes=body?byteLength(JSON.stringify(body)):0;
@@ -18317,7 +18316,7 @@ if (pinBtn) {
           <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
           <div class="status" data-sync-status></div>
           <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
-          <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor — daily & monthly (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
+          <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor — daily &amp; monthly (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every 30 seconds)</b></label>
           <div class="actions"><button data-conflicts-open type="button">View Sync Conflicts</button><button data-activity-open>View Shared Activity Log</button></div>
@@ -18351,7 +18350,7 @@ if (pinBtn) {
             event?.preventDefault();
             event?.stopPropagation();
             const pendingName=panel?.querySelector('[data-device-label]');
-            if (pendingName) set(DEVICE_LABEL_KEY,pendingName.value.trim().slice(0,60)||deviceId);
+            if (pendingName && pendingName.dataset.edited==='yes' && pendingName.value.trim()) set(DEVICE_LABEL_KEY,pendingName.value.trim().slice(0,60));
             listeners.abort();
             host.style.setProperty('display','none','important');
             detachSyncElement(host);
@@ -18379,12 +18378,8 @@ if (pinBtn) {
                     ? 'Automatic sync OFF (local data only)'
                     : status;
         renderLastAutoSync();
+        renderBandwidth();
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
-        try { renderBandwidth(); } catch (err) {
-            const monitor=panel.querySelector('[data-bandwidth]');
-            if(monitor) monitor.textContent="Bandwidth monitor error: "+String(err?.message||err);
-            console.error("Toolbar bandwidth render error",err);
-        }
         panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
         panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
@@ -18401,18 +18396,19 @@ if (pinBtn) {
         panel.querySelector('[data-activity-open]').onclick=()=>void showSharedActivity();
         const labelInput=panel.querySelector('[data-device-label]');
         labelInput.value=deviceLabel();
-        // Preserve the existing device name even if bandwidth rendering fails.
         const labelStatus=panel.querySelector('[data-device-save-status]');
         let labelSaveTimer=null;
         const saveDeviceLabel=()=>{
             if (labelSaveTimer!==null) {clearTimeout(labelSaveTimer);labelSaveTimer=null;}
-            const name=labelInput.value.trim().slice(0,60)||deviceId;
+            const name=labelInput.value.trim().slice(0,60);
+            if (!name || labelInput.dataset.edited!=='yes') return;
             set(DEVICE_LABEL_KEY,name);
             labelStatus.textContent='Saved as: '+name+' (this computer)';
         };
         // Save as the user types, not only on change/blur. Closing the panel
         // or clicking elsewhere must not lose the name.
         labelInput.addEventListener('input',()=>{
+            labelInput.dataset.edited='yes';
             labelStatus.textContent='Saving...';
             if (labelSaveTimer!==null) clearTimeout(labelSaveTimer);
             labelSaveTimer=setTimeout(saveDeviceLabel,300);
@@ -18420,8 +18416,6 @@ if (pinBtn) {
         labelInput.addEventListener('blur',saveDeviceLabel);
         labelInput.addEventListener('change',saveDeviceLabel);
         labelStatus.textContent='Current name: '+deviceLabel();
-        // Keep checkbox consistent with the persisted auto-sync setting.
-        panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
         panel.querySelector('[data-auto-new]').onchange=e=>{if(e.target.checked){e.target.checked=false;void enableAutoNew().then(()=>{if(panel?.isConnected){panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);renderLastAutoSync();}});}else{set(AUTO_NEW_ENABLED_KEY,false);say('Safe automatic sync OFF');renderLastAutoSync();}};
     }
     GM_registerMenuCommand('Contact Toolbar — Team Sync',()=>setTimeout(openPanel,0));
