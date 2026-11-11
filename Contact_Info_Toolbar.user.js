@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.479
+// @version      9.6.480
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -17265,6 +17265,37 @@ if (pinBtn) {
         await authorized(session.access_token);
         set('session',JSON.stringify(session)); say('Signed in. Sync remains OFF until enabled.');
     }
+    // v480: Verify authentication only when Team Sync opens or the user signs in.
+    // No polling: this adds at most one membership request per panel opening,
+    // except when an expired access token must be refreshed.
+    let authCheckSequence = 0;
+    function showAuthStatus(message, color) {
+        const el = panel?.querySelector('[data-auth-status]');
+        if (el) { el.textContent = message; el.style.color = color; }
+    }
+    async function checkAuthStatus() {
+        const sequence = ++authCheckSequence;
+        const session = parse(get('session','{}'));
+        if (!session.access_token) {
+            showAuthStatus('Sign-in status: Not signed in', '#ffcc9b');
+            return;
+        }
+        showAuthStatus('Sign-in status: Verifying session…', '#d7e5f8');
+        try {
+            const t = await token();
+            await authorized(t);
+            if (sequence !== authCheckSequence) return;
+            showAuthStatus('Sign-in status: Signed in — Supabase verified', '#bde8c8');
+        } catch (e) {
+            if (sequence !== authCheckSequence) return;
+            const current = parse(get('session','{}'));
+            if (!current.access_token) {
+                showAuthStatus('Sign-in status: Not signed in', '#ffcc9b');
+            } else {
+                showAuthStatus('Sign-in status: Could not verify (' + String(e?.message || e) + ')', '#ffd58a');
+            }
+        }
+    }
     async function fetchRemote(t) {
         const all = new Map();
         for (let offset=0; offset<100000; offset+=500) {
@@ -18329,6 +18360,7 @@ if (pinBtn) {
           <div class="heading"><h2>Contact Toolbar — Team Sync</h2><button class="close" type="button" data-close aria-label="Close Team Sync">×</button></div>
           <div class="status" data-sync-status></div>
           <div class="status" data-last-auto-sync aria-live="off" style="margin-top:8px;font-weight:bold;"></div>
+          <div class="status" data-auth-status aria-live="polite" style="margin-top:7px;font-weight:bold;">Sign-in status: Checking…</div>
           <div style="margin:12px 0;padding:10px;border:1px solid #536478;border-radius:7px"><b>Bandwidth Monitor — daily &amp; monthly (this computer)</b><div data-bandwidth style="white-space:pre-line;font-size:12px;line-height:1.65;margin-top:6px"></div><div class="note">Measured JSON response/request bodies only; excludes HTTP headers and other project traffic. Savings are an estimate against repeated full reads.</div></div>
           <hr>
           <label class="toggle"><input data-auto-new type="checkbox"><b>Automatic two-way sync (every hour)</b></label>
@@ -18391,10 +18423,11 @@ if (pinBtn) {
                     ? 'Automatic sync OFF (local data only)'
                     : status;
         renderLastAutoSync();
+        void checkAuthStatus();
         renderBandwidth();
         panel.querySelector('[data-auto-new]').checked=!!get(AUTO_NEW_ENABLED_KEY,false);
-        panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';}catch(e){say('Login error: '+e.message);}};
-        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
+        panel.querySelector('[data-login]').onclick=async()=>{try{await signIn(panel.querySelector('[data-email]').value.trim(),panel.querySelector('[data-pass]').value);panel.querySelector('[data-pass]').value='';void checkAuthStatus();}catch(e){say('Login error: '+e.message);void checkAuthStatus();}};
+        panel.querySelector('[data-logout]').onclick=()=>{set('enabled',false);set(AUTO_NEW_ENABLED_KEY,false);set('session','{}');++authCheckSequence;showAuthStatus('Sign-in status: Not signed in', '#ffcc9b');panel.querySelector('[data-auto-new]').checked=false;say('Signed out; auto sync OFF');};
         panel.querySelector('[data-seed]').onclick=()=>{const f=panel.querySelector('[data-file]').files?.[0];if(!f){say('Choose your exported backup JSON first');return;}seedBackup(f);};
         panel.querySelector('[data-now]').onclick=syncNow;
         panel.querySelector('[data-download]').onclick=downloadMissingOnly;
