@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.480
+// @version      9.6.481
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5767,6 +5767,21 @@ function fillNameFieldsWithLoadRetries() {
         // v196: An Indeed relay in the contact field is disposable. Always allow
         // the real resume email to replace it, including azulmail.net and .edu.
         if (isIndeedEmailRelay(current)) return false;
+
+        // v481: The sole additional protected-email exception is .edu -> .edu.
+        // The proposed address must be a complete email explicitly present in the
+        // resume text (not merely guessed from the applicant's name).
+        const isEdu = domain => domain.endsWith(".edu");
+        if (isEdu(currentDomain) && isEdu(proposedDomain) &&
+            /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.edu$/i.test(proposed)) {
+            const source = String(getResumeText() || getIframeResumeTextForRareFallback() || "");
+            const escaped = proposed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const explicit = new RegExp("(^|[^A-Z0-9._%+\\-])" + escaped + "(?=$|[^A-Z0-9._%+\\-])", "i").test(source);
+            if (explicit) {
+                console.info(`Toolbar EMAIL v481: allowed verified .edu-to-.edu replacement: "${current}" -> "${proposed}".`);
+                return false;
+            }
+        }
 
         // Otherwise preserve the existing protected-destination rule.
         return isProtectedEmailDestination(proposed) && !isAzulmailEmail(current);
