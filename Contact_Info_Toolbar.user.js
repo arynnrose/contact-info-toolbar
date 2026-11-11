@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.478
+// @version      9.6.479
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -18193,9 +18193,14 @@ if (pinBtn) {
                     isDeleted(here)===isDeleted(row)) continue;
                 data[row.category][row.item_key]=row.item_value;
                 if (isDeleted(row)) deletesDownloaded++;else downloaded++;
-                await recordActivity(t,isDeleted(row)?'Deletion received':'Added/updated (downloaded)',row);
+                // v479: Batch downloaded-row activity into a single verified summary.
+                // Per-row recordActivity() performed several HTTP requests per row,
+                // making first login with thousands of rows appear stuck for hours.
             }
             if (downloaded || deletesDownloaded) {
+                await recordActivity(t,'Downloaded batch',{
+                    category:'teamSync',item_key:'batch-'+Date.now()
+                },downloaded+' active and '+deletesDownloaded+' deleted entries received');
                 writeLocal(data);
                 // Do not re-queue changes that came from Supabase.
                 set(AUTO_BASELINE_KEY,JSON.stringify(autoSnapshot()));
