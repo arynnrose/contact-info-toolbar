@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.481
+// @version      9.6.482
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -9853,6 +9853,35 @@ function findExplicitLocationInLiteralRawContact() {
     const raw = String(document.getElementById("txtResumeRaw")?.value || "").trim();
     if (!raw) return null;
 
+    // v482: Preserve an existing verified contact address when the raw converter
+    // drops city apostrophes (Coeur d'Alene -> Coeur dAlene). Compare only the
+    // TRUE contact header and require the existing state and full ZIP together.
+    // Do not use this relaxed comparison for any work-history location.
+    const v482City = String(document.getElementById("txtCityDataEntry")?.value || "").trim();
+    const v482State = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+    const v482Zip = String(document.getElementById("txtZipDataEntry")?.value || "").trim();
+    if (v482City && /^[A-Z]{2}$/.test(v482State) && /^\d{5}(?:-\d{4})?$/.test(v482Zip)) {
+        const stop = findTrueResumeSectionStop(raw);
+        const header = raw.slice(0, Math.min(900, stop >= 0 ? stop : 900));
+        const folded = value => String(value).toLowerCase().replace(/['’`]/g, "").replace(/[^a-z0-9]/g, "");
+        const addressRe = /([A-Za-z][A-Za-z.'’ -]{0,65}?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)(?!\d)/gi;
+        let match;
+        while ((match = addressRe.exec(header))) {
+            if (match[2].toUpperCase() !== v482State || match[3] !== v482Zip) continue;
+            const words = match[1].trim().split(/\s+/);
+            for (let n = 1; n <= Math.min(words.length, 6); n++) {
+                if (folded(words.slice(-n).join(" ")) !== folded(v482City)) continue;
+                if (learnedCityCollidesWithApplicantLastName(v482City)) break;
+                if (!(isUsCityDatabasePair(v482City, v482State) ||
+                    (learnedCitiesLoaded && Object.values(learnedCitiesCache || {}).some(e =>
+                        e && e.deleted !== true && e.trustedManualCity !== false &&
+                        learnedCityStateKey(e.city, e.state) === learnedCityStateKey(v482City, v482State))))) break;
+                console.info(`Toolbar CITY v482: protected existing header address despite apostrophe variation -> ${v482City}, ${v482State} ${v482Zip}.`);
+                return {city:v482City, state:v482State, zip:v482Zip, trusted:true, withState:true, literalRawContact:true, explicitHeaderPair:true};
+            }
+        }
+    }
+
     // v436: Preserve an already-correct contact City/State/ZIP when the exact
     // same complete address appears in the actual resume contact header.
     // This handles "Atlanta Ga. 30349" without weakening the street-suffix
@@ -9919,7 +9948,8 @@ function findExplicitLocationInLiteralRawContact() {
     // v330: Flattened header may prepend unrelated words to a real learned city.
     // Only recover a saved city when its full name is immediately followed by
     // an explicit comma + matching state in the first 900 header characters.
-    const headerPrefix = raw.slice(0, 900);
+    // v482: never search Work Experience for a contact-header city.
+    const headerPrefix = contactHeader;
     if (learnedCitiesLoaded) {
         const matches = Object.values(learnedCitiesCache || {})
             .filter(e => e && e.deleted !== true && e.trustedManualCity !== false && e.city && e.state)
