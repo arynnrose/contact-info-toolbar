@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.482
+// @version      9.6.483
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -373,6 +373,22 @@ function frt7StripFullContactPhoneEmailPrefix(value) {
     return repaired;
 }
 
+// v483: Contact ZIP/email boundary protection. Only remove the exact five-digit
+// ZIP from the active contact record when glued to an alphabetic email username.
+// Never remove arbitrary numbers or a partial ZIP.
+function frt7StripExactContactZipEmailPrefix(value) {
+    const original = String(value || '').trim();
+    const zipField = document.getElementById('txtZipDataEntry');
+    const zip = String(zipField?.value || '').trim().match(/^(\d{5})(?:-\d{4})?$/)?.[1];
+    if (!zip) return original;
+    const at = original.indexOf('@');
+    if (at < 6 || !original.startsWith(zip)) return original;
+    const remainder = original.slice(5);
+    if (!/^[A-Za-z][A-Za-z0-9._%+\-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}$/i.test(remainder)) return original;
+    console.info(`Toolbar EMAIL v483: removed exact contact ZIP prefix: "${original}" -> "${remainder}".`);
+    return remainder;
+}
+
 function sanitizeEmail(email) {
     if (!email) return email;
 
@@ -462,7 +478,7 @@ function sanitizeEmail(email) {
     }
     // Preserve Apple relay handling, then normalize casing.
     clean = clean.replace(/\.appleid\.com.*$/i, ".appleid.com");
-    return frt7StripFullContactPhoneEmailPrefix(clean).toLowerCase();
+    return frt7StripExactContactZipEmailPrefix(frt7StripFullContactPhoneEmailPrefix(clean)).toLowerCase();
 }
 
 // v413 UNIVERSAL EMAIL/WEBSITE SEPARATION (ALL SOURCES):
@@ -525,6 +541,33 @@ function frt7RemoveAppendedWebsite(email) {
     document.addEventListener("input", e => { if (e.target?.id === "txtEmail" || e.target?.id === "txtPhoneDataEntry" || e.target?.id === "txtPhone") repair(); }, true);
     setInterval(repair, 500);
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", repair, { once: true });
+    else repair();
+})();
+
+// v483: Repair ZIP contamination already present in the site's email field,
+// including late repaints; share the exact same sanitizer boundary as Auto/manual.
+(function frt7GuardExistingEmailZipPrefix() {
+    if (window.top !== window.self) return;
+    let busy = false;
+    function repair() {
+        if (busy) return;
+        const input = document.getElementById('txtEmail');
+        if (!input) return;
+        const before = String(input.value || '');
+        const after = frt7StripExactContactZipEmailPrefix(before);
+        if (before === after) return;
+        busy = true;
+        try {
+            input.value = after;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        } finally { busy = false; }
+    }
+    document.addEventListener('input', e => {
+        if (e.target?.id === 'txtEmail' || e.target?.id === 'txtZipDataEntry') repair();
+    }, true);
+    setInterval(repair, 500);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', repair, { once: true });
     else repair();
 })();
 
