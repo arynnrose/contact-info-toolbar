@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.485
+// @version      9.6.487
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10707,6 +10707,34 @@ function frt7WordCodeContactAddress() {
     return null;
 }
 
+// v487: Extend the EXISTING verified-contact-header pathway to support
+// City, ST Area (no ZIP). Require an actual contact-header email and phone,
+// and a validated US city/state; never inspect experience entries.
+function frt7VerifiedContactAreaHeaderV487() {
+    try {
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "");
+        const first = raw.slice(0, 850);
+        const stop = findTrueResumeSectionStop(first);
+        const header = (stop >= 0 ? first.slice(0, stop) : first).slice(0, 450);
+        const email = String(document.getElementById("txtEmail")?.value || "").trim().toLowerCase();
+        const phone = String(document.getElementById("txtPhoneDataEntry")?.value || document.getElementById("txtPhone")?.value || "").replace(/\D/g, "").slice(-10);
+        if (!email.includes("@") || phone.length !== 10 ||
+            !header.toLowerCase().includes(email) || !header.replace(/\D/g, "").includes(phone)) return null;
+        const re = /\b([A-Za-z][A-Za-z.'’-]{1,35}(?:\s+[A-Za-z][A-Za-z.'’-]{1,35}){0,2})\s*,\s*([A-Z]{2})\s+Area\s*\|/gi;
+        let m;
+        while ((m = re.exec(header))) {
+            const after = header.slice(m.index + m[0].length, m.index + m[0].length + 150);
+            if (!after.toLowerCase().includes(email) || !after.replace(/\D/g, "").includes(phone)) continue;
+            const state = m[2].toUpperCase(), words = m[1].trim().split(/\s+/);
+            for (let n = Math.min(3, words.length); n >= 1; n--) {
+                const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
+                if (isUsCityDatabasePair(city, state)) return {city, state, verifiedAreaHeader: true};
+            }
+        }
+    } catch (e) { console.warn("Toolbar CITY v487: verified Area header check failed", e); }
+    return null;
+}
+
 // v449: A resume header with an explicit City, ST ZIP matching the current
 // ZIP can override a source city that disagrees. Restrict to the beginning of
 // the resume and require the existing ZIP verbatim; never infer from prose.
@@ -10741,7 +10769,7 @@ function frt7ExplicitHeaderZipCorrection() {
 
 // v452: hand the verified header result to the actual Auto writer, not just the lock.
 function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
-    const loc = frt7WordCodeContactAddress() || frt7ExplicitHeaderZipCorrection();
+    const loc = frt7WordCodeContactAddress() || frt7ExplicitHeaderZipCorrection() || frt7VerifiedContactAreaHeaderV487();
     if (!loc) return false;
     const sourceOK = frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource();
     const cityEl = document.getElementById("txtCityDataEntry");
@@ -10753,6 +10781,29 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
     const cityLocked = cityEl ? isManualContactLocked("city", cityEl) : true;
     const stateLocked = stateEl ? isManualContactLocked("state", stateEl) : true;
     const zipLocked = zipEl ? isManualContactLocked("zip", zipEl) : true;
+    // v487: Same verified-header writer, with a no-ZIP contact-header case.
+    // Do not relax the existing ZIP-backed path.
+    if (loc.verifiedAreaHeader) {
+        let cityEnabled = false, stateEnabled = false;
+        try {
+            const raw = GM_getValue(AUTO_FIELDS_KEY, {});
+            const settings = typeof raw === "string" ? JSON.parse(raw || "{}") : raw;
+            cityEnabled = settings?.city !== false;
+            stateEnabled = settings?.state !== false;
+        } catch (_) { return false; }
+        if (!sourceOK || !cityEnabled || !stateEnabled || touched || cityLocked || stateLocked || zipLocked ||
+            !cityEl || !stateEl || !zipEl) return false;
+        if (String(cityEl.value || "").trim() !== loc.city) { cityEl.value = loc.city; triggerEvents(cityEl); }
+        if (String(stateEl.value || "").trim().toUpperCase() !== loc.state) { stateEl.value = loc.state; triggerEvents(stateEl); }
+        const oldZip = String(zipEl.value || "").trim();
+        if (oldZip && frt7StateFromZipV171(oldZip.slice(0, 5)) !== loc.state) {
+            zipEl.value = ""; triggerEvents(zipEl);
+        }
+        frt7SetAuthoritativeHeaderLocation(loc, "v487 verified contact Area header");
+        frt7QueueAuthoritativeLocationSettleGuard("v487 verified contact Area header");
+        console.info(`Toolbar CITY v487: existing verified-header writer applied ${loc.city}, ${loc.state} Area; old ZIP checked.`);
+        return true;
+    }
     const zipMatches = String(zipEl?.value || "").trim() === loc.zip;
     const stateMatches = String(stateEl?.value || "").trim().toUpperCase() === loc.state;
     // v454: The state/ZIP-only Auto pass explicitly supplies city:false even
@@ -10781,7 +10832,7 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
 
 function frt7SourceProtectionAllowed() {
     if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
-    const explicitZipHeader = frt7WordCodeContactAddress() || frt7ExplicitHeaderZipCorrection();
+    const explicitZipHeader = frt7WordCodeContactAddress() || frt7ExplicitHeaderZipCorrection() || frt7VerifiedContactAreaHeaderV487();
     if (explicitZipHeader) {
         const currentCity = normalizeContactDisplayCase(String(document.getElementById("txtCityDataEntry")?.value || "").trim());
         const currentState = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
@@ -12456,6 +12507,9 @@ function fillAutoCityStateFromResume(fields = {}) {
             }
         }
     } catch (e) { console.warn("Toolbar AUTO LOCATION v313: iframe header unavailable", e); }
+
+    // v487: Reuse the established verified-header writer before source lock.
+    if (frt7ApplyVerifiedHeaderZipCorrection(wantsCity, wantsState)) return true;
 
     // v295 HARD SOURCE CITY/STATE LOCK:
     // Career Builder and Resume Library own the City+State pair whenever BOTH fields
@@ -15114,6 +15168,8 @@ document.getElementById("frt7-reset-bg")
             const verifiedContact = frt7VerifiedExistingContactLocation();
             if (verifiedContact) return verifiedContact;
 
+            const areaContact = frt7VerifiedContactAreaHeaderV487();
+            if (areaContact) return areaContact;
             const valid = loc => frt7ValidHeaderCity(loc) ? loc : null;
             const ocrAddress = valid(frt7OcrNorthBrunswickHeader(resumeText));
             if (ocrAddress) return ocrAddress;
