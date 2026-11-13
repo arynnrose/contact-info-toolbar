@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.484
+// @version      9.6.485
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -5064,20 +5064,42 @@ function fillNameFields(options = {}) {
             fold(existingFirst) !== fold(proposedFirst) ||
             !oldParts.slice(0, -1).some((_, i) => oldParts.slice(0, i + 1).join("-") === shortLast)) return false;
 
-        const raw = String(document.getElementById("txtResumeRaw")?.value || "")
-            .replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-        // Exact first-name / shortened-surname tokens at the start of raw text.
-        // The next text must be a City, ST ZIP address with a contact separator.
-        const expected = `${fold(proposedFirst)} ${shortLast}`;
-        const rawFold = fold(raw);
-        if (!rawFold.startsWith(expected + " ")) { console.info("Toolbar NAME v461: hyphen exception denied: raw name header mismatch."); return false; }
-        const remainder = rawFold.slice(expected.length).trimStart();
-        if (!/^[a-z][a-z .'-]{1,70},\s*[a-z]{2}\s+\d{5}(?:-\d{4})?\s*\|/.test(remainder)) { console.info("Toolbar NAME v461: hyphen exception denied: no City, ST ZIP contact boundary."); return false; }
-
+        // v485: A clearly isolated rendered heading may be authoritative even
+        // when the flattened raw text lacks the old City, ST ZIP | boundary.
+        // Require the heading to be the FIRST visible resume line, followed by
+        // independent contact evidence. Never allow a clipped/split surname.
         const heading = getExplicitResumeNameHeading();
-        if (!heading || fold(heading.first) !== fold(proposedFirst) ||
-            fold(heading.last) !== shortLast) { console.info("Toolbar NAME v461: hyphen exception denied: rendered heading mismatch."); return false; }
-        console.info(`Toolbar NAME v461: raw header and rendered heading independently confirm ${proposedFirst} ${proposedLast}; allowing complete hyphen-component correction from "${existingLast}".`);
+        if (!heading?.renderedFirstLine ||
+            fold(heading.first) !== fold(proposedFirst) ||
+            fold(heading.last) !== shortLast ||
+            fold(heading.renderedLine) !== `${fold(proposedFirst)} ${shortLast}`) {
+            console.info("Toolbar NAME v485: hyphen shortening denied: no exact standalone rendered heading.");
+            return false;
+        }
+        const iframe = document.querySelector("#divResumeContainer iframe");
+        let doc;
+        try { doc = iframe?.contentDocument || iframe?.contentWindow?.document; } catch (_) {}
+        const rendered = String(doc?.querySelector(".Section1")?.innerText || doc?.body?.innerText || "");
+        const lines = rendered.split(/\r?\n/).map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+        if (!lines.length || fold(lines[0]) !== fold(heading.renderedLine)) {
+            console.info("Toolbar NAME v485: hyphen shortening denied: heading is not first rendered line.");
+            return false;
+        }
+        const contact = lines.slice(1, 7).join(" ");
+        const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(contact);
+        const hasPhone = /(?:\+?1[\s.()-]*)?\(?\d{3}\)?[\s.()-]*\d{3}[\s.()-]*\d{4}/.test(contact);
+        if (!hasEmail && !hasPhone) {
+            console.info("Toolbar NAME v485: hyphen shortening denied: no nearby contact evidence.");
+            return false;
+        }
+        // Reject evidence that the full surname is present in the opening
+        // header despite the short rendered line (e.g. broken Word table).
+        const header = lines.slice(0, 7).join(" ").toLowerCase();
+        if (header.includes(fold(existingLast))) {
+            console.info("Toolbar NAME v485: hyphen shortening denied: full surname also in rendered header.");
+            return false;
+        }
+        console.info(`Toolbar NAME v485: standalone first-line heading and nearby contact confirm ${proposedFirst} ${proposedLast}; allowing whole hyphen component correction from "${existingLast}".`);
         return true;
     }
 
@@ -5324,7 +5346,8 @@ function scheduleRenderedNameRefinement() {
             proposedLastFoldForTruncation.length >= 1 &&
             proposedLastFoldForTruncation.length < currentLastFoldForTruncation.length &&
             (currentLastFoldForTruncation.startsWith(proposedLastFoldForTruncation) ||
-             currentLastFoldForTruncation.endsWith(proposedLastFoldForTruncation))
+             currentLastFoldForTruncation.endsWith(proposedLastFoldForTruncation)) &&
+            !frt7V461ConfirmedHyphenSurnameShortening(currentFirst, currentLast, proposedFirst, proposedLast)
         ) {
             console.info(
                 `Toolbar NAME v265: blocked delayed rendered-name truncation ` +
