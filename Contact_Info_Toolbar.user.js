@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.489
+// @version      9.6.490
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -7866,10 +7866,16 @@ function fillNameFieldsWithLoadRetries() {
         const authoritativeCity = savedSuffix || city;
         if (savedSuffix) console.info(`Toolbar CITY v462: corrected unrecognized header city "${city}, ${state}" to saved pair "${savedSuffix}, ${state}".`);
 
+        // v490: Do not let a later education/job-derived trusted location
+        // replace an already verified applicant contact address.
+        const existing = frt7GetAuthoritativeHeaderLocation();
+        if (existing?.reason?.includes("v490 verified applicant contact ZIP address") &&
+            !String(reason).includes("v490 verified applicant contact ZIP address")) return false;
         frt7AuthoritativeHeaderLocation = {
             key: frt7AuthoritativeLocationKey(),
             city: authoritativeCity,
             state,
+            zip: String(loc?.contactZipV490 ? loc.zip : ""),
             reason
         };
         return true;
@@ -7905,7 +7911,11 @@ function fillNameFieldsWithLoadRetries() {
         const wantedState = String(lock.state || "").trim().toUpperCase();
         const currentCity = normalizeContactDisplayCase(String(cityInput.value || "").trim());
         const currentState = String(stateInput.value || "").trim().toUpperCase();
-        if (currentCity === wantedCity && currentState === wantedState) return false;
+        // v490: Also restore the exact verified contact ZIP after site repaints.
+        const zipInput = document.getElementById("txtZipDataEntry");
+        const wantedZip = String(lock.reason || "").includes("v490 verified applicant contact ZIP address") ? String(lock.zip || "") : "";
+        const repairZip = Boolean(wantedZip && zipInput && !isManualContactLocked("zip", zipInput) && String(zipInput.value || "").trim() !== wantedZip);
+        if (currentCity === wantedCity && currentState === wantedState && !repairZip) return false;
 
         frt7AuthoritativeLocationWriteInProgress = true;
         try {
@@ -7917,6 +7927,7 @@ function fillNameFieldsWithLoadRetries() {
                 stateInput.value = wantedState;
                 triggerEvents(stateInput);
             }
+            if (repairZip) { zipInput.value = wantedZip; triggerEvents(zipInput); }
         } finally {
             frt7AuthoritativeLocationWriteInProgress = false;
         }
@@ -8947,6 +8958,8 @@ function findTrustedLearnedCityInHeader(text) {
         frt7SetAuthoritativeHeaderLocation(coverLetterApplicant, "v361 cover-letter applicant location");
         return coverLetterApplicant;
     }
+    const v490Contact = frt7VerifiedContactZipHeaderV490();
+    if (v490Contact) return v490Contact;
     const verifiedContact = frt7VerifiedExistingContactLocation();
     if (verifiedContact) return verifiedContact;
 
@@ -10739,6 +10752,34 @@ function frt7ExplicitHeaderZipCorrection() {
     return null;
 }
 
+// v490: Complete contact address outranks a later learned education/job city.
+// Require the applicant's current email and phone beside City, ST ZIP in the
+// first contact block. The ZIP must agree with the explicit state.
+function frt7VerifiedContactZipHeaderV490() {
+    try {
+        const raw = String(document.getElementById("txtResumeRaw")?.value || "").replace(/\s+/g, " ").trim();
+        const email = String(document.getElementById("txtEmail")?.value || "").trim().toLowerCase();
+        const phone = String(document.getElementById("txtPhoneDataEntry")?.value || document.getElementById("txtPhone")?.value || "").replace(/\D/g, "").slice(-10);
+        if (!raw || !email.includes("@") || phone.length !== 10) return null;
+        const section = findTrueResumeSectionStop(raw.slice(0, 1100));
+        const head = raw.slice(0, section >= 0 ? Math.min(section, 650) : 450);
+        const re = /\b([A-Za-z][A-Za-z.'’ -]{1,65}?)\s*,\s*([A-Z]{2})\s*(\d{5})(?!\d)\s*\|\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\s*\|\s*(?:\+?1[\s.()-]*)?\(?([2-9]\d{2})\)?[\s.()-]*(\d{3})[\s.-]*(\d{4})(?!\d)/gi;
+        let m;
+        while ((m = re.exec(head))) {
+            if (m[4].toLowerCase() !== email || m[5] + m[6] + m[7] !== phone) continue;
+            const state = m[2].toUpperCase(), zip = m[3];
+            if (frt7StateFromZipV171(zip) !== state) continue;
+            const words = m[1].trim().split(/\s+/);
+            for (let n = Math.min(4, words.length); n >= 1; n--) {
+                const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
+                if (!isUsCityDatabasePair(city, state) && !learnedCitiesCache?.[learnedCityStateKey(city, state)]) continue;
+                return {city, state, zip, contactZipV490: true, trusted: true, explicitHeaderPair: true, index: m.index};
+            }
+        }
+    } catch (e) { console.warn("Toolbar CITY v490: contact ZIP verification failed", e); }
+    return null;
+}
+
 // v489: Verify a City, ST Area CONTACT line in the real resume header.
 // A professional headline may separate the name and contact line. Require
 // phone AND email in the same pipe-delimited line, before the first section.
@@ -10773,7 +10814,7 @@ function frt7VerifiedAreaContactHeaderV489() {
 
 // v452: hand the verified header result to the actual Auto writer, not just the lock.
 function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
-    const loc = frt7WordCodeContactAddress() || frt7VerifiedAreaContactHeaderV489() || frt7ExplicitHeaderZipCorrection();
+    const loc = frt7VerifiedContactZipHeaderV490() || frt7WordCodeContactAddress() || frt7VerifiedAreaContactHeaderV489() || frt7ExplicitHeaderZipCorrection();
     if (!loc) return false;
     const sourceOK = frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource();
     const cityEl = document.getElementById("txtCityDataEntry");
@@ -10797,15 +10838,15 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
         const parsedFields = typeof storedFields === "string" ? JSON.parse(storedFields || "{}") : storedFields;
         citySettingEnabled = parsedFields?.city !== false;
     } catch (_) { citySettingEnabled = false; }
-    if (!sourceOK || !citySettingEnabled || touched || cityLocked || stateLocked || zipLocked ||
-        !cityEl || !stateEl || !zipEl || (!loc.wordContact && !loc.areaContact && (!zipMatches || !stateMatches))) {
+    if ((!sourceOK && !loc.contactZipV490) || !citySettingEnabled || touched || cityLocked || stateLocked || zipLocked ||
+        !cityEl || !stateEl || !zipEl || (!loc.wordContact && !loc.areaContact && !loc.contactZipV490 && (!zipMatches || !stateMatches))) {
         console.warn(`Toolbar CITY v454: verified ${loc.city}, ${loc.state} ${loc.zip} but write blocked: source=${sourceOK}, citySetting=${citySettingEnabled}, internalAllowCity=${Boolean(allowCity)}, touched=${touched}, locks=${cityLocked}/${stateLocked}/${zipLocked}, stateMatches=${stateMatches}, zipMatches=${zipMatches}, fields=${Boolean(cityEl)}/${Boolean(stateEl)}/${Boolean(zipEl)}.`);
         return false;
     }
     cityEl.value = loc.city;
     triggerEvents(cityEl);
-    if ((loc.wordContact || loc.areaContact) && !stateMatches) { stateEl.value = loc.state; triggerEvents(stateEl); }
-    if (loc.wordContact && !zipMatches) { zipEl.value = loc.zip; triggerEvents(zipEl); }
+    if ((loc.wordContact || loc.areaContact || loc.contactZipV490) && !stateMatches) { stateEl.value = loc.state; triggerEvents(stateEl); }
+    if ((loc.wordContact || loc.contactZipV490) && !zipMatches) { zipEl.value = loc.zip; triggerEvents(zipEl); }
     if (loc.areaContact) {
         if (String(zipEl.value || "").trim() && frt7StateFromZipV171(String(zipEl.value).trim().slice(0, 5)) !== loc.state) {
             zipEl.value = "";
@@ -10819,6 +10860,11 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
             fireZipLookupEnter(lookup);
         }
     }
+    if (loc.contactZipV490) {
+        frt7SetAuthoritativeHeaderLocation(loc, "v490 verified applicant contact ZIP address");
+        frt7QueueAuthoritativeLocationSettleGuard("v490 verified contact ZIP");
+        console.info(`Toolbar CITY v490: prioritized verified contact address ${loc.city}, ${loc.state} ${loc.zip} over later resume locations.`);
+    }
     if (loc.wordContact) frt7SetAuthoritativeHeaderLocation(loc, "v455 verified Word contact address");
     console.info(`Toolbar CITY v489: verified header correction ${before} -> ${loc.city}, ${loc.state}; ZIP ${loc.areaContact ? "lookup requested" : "preserved"} (internalAllowCity=${Boolean(allowCity)}).`);
     return true;
@@ -10826,7 +10872,7 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
 
 function frt7SourceProtectionAllowed() {
     if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
-    const explicitZipHeader = frt7WordCodeContactAddress() || frt7VerifiedAreaContactHeaderV489() || frt7ExplicitHeaderZipCorrection();
+    const explicitZipHeader = frt7VerifiedContactZipHeaderV490() || frt7WordCodeContactAddress() || frt7VerifiedAreaContactHeaderV489() || frt7ExplicitHeaderZipCorrection();
     if (explicitZipHeader) {
         const currentCity = normalizeContactDisplayCase(String(document.getElementById("txtCityDataEntry")?.value || "").trim());
         const currentState = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
