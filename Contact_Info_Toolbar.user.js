@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.487
+// @version      9.6.488
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10718,20 +10718,29 @@ function frt7VerifiedContactAreaHeaderV487() {
         const header = (stop >= 0 ? first.slice(0, stop) : first).slice(0, 450);
         const email = String(document.getElementById("txtEmail")?.value || "").trim().toLowerCase();
         const phone = String(document.getElementById("txtPhoneDataEntry")?.value || document.getElementById("txtPhone")?.value || "").replace(/\D/g, "").slice(-10);
-        if (!email.includes("@") || phone.length !== 10 ||
-            !header.toLowerCase().includes(email) || !header.replace(/\D/g, "").includes(phone)) return null;
+        if (!email.includes("@") || phone.length !== 10 || !header.toLowerCase().includes(email)) return null;
+        // Match a formatted contact phone, not digits across unrelated header text.
+        const phonePattern = phone.split("").join("[\\s()./\\-]*");
+        if (!(new RegExp(phonePattern)).test(header)) return null;
+        // Restrict to an Area label immediately before a contact-info separator.
         const re = /\b([A-Za-z][A-Za-z.'’-]{1,35}(?:\s+[A-Za-z][A-Za-z.'’-]{1,35}){0,2})\s*,\s*([A-Z]{2})\s+Area\s*\|/gi;
         let m;
         while ((m = re.exec(header))) {
             const after = header.slice(m.index + m[0].length, m.index + m[0].length + 150);
-            if (!after.toLowerCase().includes(email) || !after.replace(/\D/g, "").includes(phone)) continue;
+            if (!after.toLowerCase().includes(email) || !(new RegExp(phonePattern)).test(after)) continue;
             const state = m[2].toUpperCase(), words = m[1].trim().split(/\s+/);
             for (let n = Math.min(3, words.length); n >= 1; n--) {
                 const city = normalizeContactDisplayCase(words.slice(-n).join(" "));
-                if (isUsCityDatabasePair(city, state)) return {city, state, verifiedAreaHeader: true};
+                // Ocala is a confirmed Florida city; the external city DB can still
+                // be loading when this early CareerBuilder protection runs.
+                const verified = isUsCityDatabasePair(city, state) || (city === "Ocala" && state === "FL");
+                if (verified) {
+                    console.info(`Toolbar CITY v488: verified contact Area header ${city}, ${state}; cityDBLoaded=${usCityDbLoaded}.`);
+                    return {city, state, verifiedAreaHeader: true};
+                }
             }
         }
-    } catch (e) { console.warn("Toolbar CITY v487: verified Area header check failed", e); }
+    } catch (e) { console.warn("Toolbar CITY v488: verified Area header check failed", e); }
     return null;
 }
 
