@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.483
+// @version      9.6.484
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -14991,6 +14991,11 @@ document.getElementById("frt7-reset-bg")
             } catch (e) { console.warn("Toolbar v157: pending First Name learning flush failed.", e); }
         }
 
+        // v484: This flush belongs to createToolbar's scope because it uses its
+        // private learned-city and safe-first-name caches. Run after initialization,
+        // never in the outgoing Save/Next click handler.
+        setTimeout(flushPendingWorkflowLearningV157, 0);
+
         function workflowActionLabel(target) {
             if (!target) return "";
 
@@ -17210,9 +17215,6 @@ if (pinBtn) {
         createToolbar();
         frt7CreateProgressBar();
 
-        // v157: persistence from the PRIOR applicant is deliberately deferred until
-        // this new page is already initialized. It never runs in the navigation click.
-        setTimeout(() => flushPendingWorkflowLearningV157(), 0);
     }
 
     if (document.readyState === "loading") {
