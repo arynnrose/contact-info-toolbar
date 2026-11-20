@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.496
+// @version      9.6.497
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -2421,6 +2421,21 @@ function isUsableTenDigitPhone(digits) {
         return pattern.test(String(header || '').slice(0, 900));
     }
 
+    // v497: No callback-array assumptions; reject ambiguous street suffixes unless
+    // a verified City + mixed-case State + ZIP occurs in the contact header.
+    function frt7MixedCaseHeaderStateZipAllowedV497(head, match, token, state) {
+        const after = String(head || '').slice(match.index + match[0].length);
+        const zipMatch = after.match(/^\s+(\d{5})(?![\d-])/);
+        if (!zipMatch || frt7StateFromZipV171(zipMatch[1]) !== state) return false;
+        const before = String(head || '').slice(0, match.index).trim();
+        const words = before.split(/\s+/).filter(Boolean);
+        for (let n = 1; n <= Math.min(5, words.length); n++) {
+            const city = words.slice(-n).join(' ').replace(/^[^A-Za-z]+|[^A-Za-z.'’-]+$/g, '');
+            if (city && frt7VerifiedMixedCaseHeaderLocation(city, token, zipMatch[1], head)) return true;
+        }
+        return false;
+    }
+
     function findUsCityDatabaseInHeader(text) {
         if (!usCityDbLoaded || !text) return null;
         const rawStart = String(text).slice(0, 1800);
@@ -2460,13 +2475,7 @@ function isUsableTenDigitPhone(digits) {
                 !hasCommaBeforeState &&
                 /^[A-Za-z]{2}$/.test(rawStateToken) &&
                 rawStateToken !== rawStateToken.toUpperCase() &&
-                !(() => {
-                    const tail = head.slice(match.index + match[0].length).match(/^\s+(\d{5})(?![\d-])/);
-                    if (!tail) return false;
-                    const beforeState = head.slice(0, match.index).trim();
-                    return beforeState.split(/[^A-Za-z.'’-]+/).filter(Boolean).slice(-5).some((_, i, a) =>
-                        frt7VerifiedMixedCaseHeaderLocation(a.slice(i).join(' '), rawStateToken, tail[1], head));
-                })()
+                !frt7MixedCaseHeaderStateZipAllowedV497(head, match, rawStateToken, state)
             ) {
                 console.info(
                     `Toolbar CITY v131: ignored mixed-case street suffix "${rawStateToken}" as a state.`
