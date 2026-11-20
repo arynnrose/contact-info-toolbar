@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.493
+// @version      9.6.494
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6268,6 +6268,48 @@ function fillNameFieldsWithLoadRetries() {
         // Prefer the already-correct contact email when the repaired resume
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
+        if (frt7IsFbsplSource()) {
+            // v494: Repair a single whitespace gap AFTER the domain dot in a
+            // known-provider contact email (e.g. k.wash03@aol. com).
+            // Limit to the contact header and require one unique candidate.
+            const sourceTexts = [
+                document.getElementById('txtResumeRaw')?.value,
+                getIframeResumeTextForRareFallback(),
+                getResumeText()
+            ].filter(Boolean);
+            const found = new Set();
+            let conflict = false;
+            for (const sourceText of sourceTexts) {
+                const raw = String(sourceText).replace(/[\u00a0\u2007\u202f]/g, ' ');
+                const stop = raw.search(/\b(?:Summary|Objective|Work Experience|Work History|Professional Experience|Education|Skills|Work Authorization|Willing to relocate)\b/i);
+                const header = (stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 450)).slice(0, 800);
+                const broken = /(^|[^A-Za-z0-9._%+\-@])([A-Za-z][A-Za-z0-9._%+\-]*@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\.[ \t]+com)(?=$|[^A-Za-z0-9.\-])/gi;
+                const intact = /(^|[^A-Za-z0-9._%+\-@])([A-Za-z0-9._%+\-]+@[A-Za-z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Za-z0-9.\-])/gi;
+                const local = new Set();
+                for (const match of header.matchAll(broken)) local.add(match[2].replace(/\.[ \t]+com$/i, '.com').toLowerCase());
+                for (const match of header.matchAll(intact)) local.add(match[2].toLowerCase());
+                if (local.size > 1) conflict = true;
+                for (const candidate of local) found.add(candidate);
+            }
+            if (!conflict && found.size === 1) {
+                const confirmed = [...found][0];
+                const [localPart, domain] = confirmed.split('@');
+                const quote = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const proof = new RegExp(quote(localPart) + '@' + quote(domain).replace(/\\\.com$/i, '\\.\\s+com'), 'i');
+                if (sourceTexts.some(sourceText => proof.test(String(sourceText).slice(0, 800)))) {
+                    const actual = String(emailInput.value || '').trim();
+                    if (actual.toLowerCase() === confirmed) return true;
+                    if (!isManualContactLocked('email', emailInput) &&
+                        !shouldBlockProtectedEmailChange(actual, confirmed) &&
+                        !isObviousOcrEmailDomainIssue(confirmed)) {
+                        runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v494: repaired single dot-space contact-header email: "${actual}" -> "${confirmed}".`);
+                        return true;
+                    }
+                }
+            }
+        }
         if (frt7IsFbsplSource()) {
             // v493: A PDF-converted FBSPL contact header can contain "name@ yahoo.com"
             // without pipe separators. Repair ONLY a single whitespace gap after @,
