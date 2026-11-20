@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.491
+// @version      9.6.492
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6345,8 +6345,25 @@ function fillNameFieldsWithLoadRetries() {
             const existingForGap = String(emailInput.value || '').trim().toLowerCase();
             const contactConfirmed = headerEmail ? null : frt7FbsplContactConfirmedGapEmail(existingForGap);
             if (contactConfirmed) {
+                // v492: v442 compared against a sanitized contact email and returned
+                // even when the real input still contained a glued phone suffix.
+                // Compare with the ACTUAL field; only write the independently
+                // confirmed header email when existing protections permit it.
+                const actual = String(emailInput.value || '').trim().toLowerCase();
+                if (actual !== contactConfirmed) {
+                    if (isManualContactLocked('email', emailInput) ||
+                        shouldBlockProtectedEmailChange(actual, contactConfirmed) ||
+                        isObviousOcrEmailDomainIssue(contactConfirmed)) {
+                        console.info('Toolbar EMAIL v492: confirmed header email differs, but existing email protections blocked a write.');
+                        return false;
+                    }
+                    runInternalEmailWrite(() => { emailInput.value = contactConfirmed; triggerEvents(emailInput); });
+                    frt7FbsplEmailStatus();
+                    console.info(`Toolbar EMAIL v492: wrote confirmed header email to actual field: "${actual}" -> "${contactConfirmed}".`);
+                    return true;
+                }
                 frt7FbsplEmailStatus();
-                console.info(`Toolbar EMAIL v442: single header gap exactly matches existing contact email: "${contactConfirmed}"; preserved.`);
+                console.info(`Toolbar EMAIL v492: confirmed header email already matches actual field: "${contactConfirmed}".`);
                 return true;
             }
             const domainGap = headerEmail ? null : frt7FbsplKnownDomainGapEmail();
