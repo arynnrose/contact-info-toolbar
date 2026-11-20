@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.495
+// @version      9.6.496
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -653,7 +653,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.367-update-test";
+    const FRT7_BUILD_ID = "9.6.496";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -2407,6 +2407,20 @@ function isUsableTenDigitPhone(digits) {
 
     // Built-in database matching is deliberately stricter than Learned Cities:
     // it only accepts an explicit City + State pair in the true resume header.
+    // v496: Mixed-case state abbreviations are accepted ONLY for an exact
+    // header City + State + ZIP triple, with a database city and ZIP-state match.
+    // This does not relax the ordinary street-suffix guard (e.g. Bloomfield Ct).
+    function frt7VerifiedMixedCaseHeaderLocation(city, stateToken, zip, header) {
+        const state = String(stateToken || '').toUpperCase();
+        if (!/^[A-Z][a-z]$/.test(String(stateToken || '')) || !/^\d{5}$/.test(String(zip || ''))) return false;
+        if (frt7StateFromZipV171(String(zip)) !== state) return false;
+        if (!isUsCityDatabasePair(city, state)) return false;
+        const esc = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp('(?:^|[^A-Za-z])' + esc(city).replace(/\s+/g, '\\s+') +
+            '\\s+' + esc(stateToken) + '\\s+' + esc(zip) + '(?![\\d-])', 'i');
+        return pattern.test(String(header || '').slice(0, 900));
+    }
+
     function findUsCityDatabaseInHeader(text) {
         if (!usCityDbLoaded || !text) return null;
         const rawStart = String(text).slice(0, 1800);
@@ -2445,7 +2459,14 @@ function isUsableTenDigitPhone(digits) {
             if (
                 !hasCommaBeforeState &&
                 /^[A-Za-z]{2}$/.test(rawStateToken) &&
-                rawStateToken !== rawStateToken.toUpperCase()
+                rawStateToken !== rawStateToken.toUpperCase() &&
+                !(() => {
+                    const tail = head.slice(match.index + match[0].length).match(/^\s+(\d{5})(?![\d-])/);
+                    if (!tail) return false;
+                    const beforeState = head.slice(0, match.index).trim();
+                    return beforeState.split(/[^A-Za-z.'’-]+/).filter(Boolean).slice(-5).some((_, i, a) =>
+                        frt7VerifiedMixedCaseHeaderLocation(a.slice(i).join(' '), rawStateToken, tail[1], head));
+                })()
             ) {
                 console.info(
                     `Toolbar CITY v131: ignored mixed-case street suffix "${rawStateToken}" as a state.`
@@ -9315,7 +9336,12 @@ function findTrustedLearnedCityInHeader(text) {
             if (
                 !strongHasComma &&
                 /^[A-Za-z]{2}$/.test(rawStrongStateToken) &&
-                rawStrongStateToken !== rawStrongStateToken.toUpperCase()
+                rawStrongStateToken !== rawStrongStateToken.toUpperCase() &&
+                !(() => {
+                    const after = head.slice(strongIndex + strongMatchedText.length);
+                    const zipMatch = after.match(/^\s+(\d{5})(?![\d-])/);
+                    return !!zipMatch && frt7VerifiedMixedCaseHeaderLocation(city, rawStrongStateToken, zipMatch[1], head);
+                })()
             ) {
                 console.info(
                     `Toolbar CITY v131: ignored "${city} ${rawStrongStateToken}" because ` +
