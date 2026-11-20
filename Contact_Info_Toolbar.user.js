@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.490
+// @version      9.6.491
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -8957,6 +8957,28 @@ function findTrustedLearnedCityInHeader(text) {
     if (coverLetterApplicant) {
         frt7SetAuthoritativeHeaderLocation(coverLetterApplicant, "v361 cover-letter applicant location");
         return coverLetterApplicant;
+    }
+    // v491: An explicitly labeled City: field in the applicant's contact header
+    // outranks an employer location appearing later in flattened resume text.
+    // Require a real US state and a nearby Phone/Email contact label; never
+    // scan past the first resume section. This does not change other city rules.
+    const explicitContactHeader = (() => {
+        const raw = String(text || '').slice(0, 1800);
+        const stop = findTrueResumeSectionStop(raw);
+        const header = raw.slice(0, Math.min(stop >= 0 ? stop : 450, 450));
+        const match = /\bCity\s*:\s*([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ.'’ -]{0,65}?)\s*,\s*([A-Za-z]{2})\b/i.exec(header);
+        if (!match) return null;
+        const state = match[2].toUpperCase();
+        if (!Object.values(STATE_MAP).includes(state)) return null;
+        const before = header.slice(Math.max(0, match.index - 220), match.index);
+        if (!/\b(?:Phone|Email)\s*:/i.test(before)) return null;
+        const city = normalizeContactDisplayCase(match[1]);
+        if (!city || !/^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ.'’ -]*$/.test(city)) return null;
+        return { city, state, trusted:true, withState:true, index:match.index, explicitContactLabel:true };
+    })();
+    if (explicitContactHeader) {
+        console.info(`Toolbar CITY v491: explicit contact City: ${explicitContactHeader.city}, ${explicitContactHeader.state} overrides later employer cities.`);
+        return explicitContactHeader;
     }
     const v490Contact = frt7VerifiedContactZipHeaderV490();
     if (v490Contact) return v490Contact;
