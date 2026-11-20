@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.501
+// @version      9.6.502
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -700,7 +700,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.501";
+    const FRT7_BUILD_ID = "9.6.502";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -6689,6 +6689,31 @@ function fillNameFieldsWithLoadRetries() {
                     return true;
                 }
                 console.info(`Toolbar EMAIL v417: ambiguous PDF candidates=${broken.length}; complete corroborated candidates=${complete.size}.`);
+            }
+            // v502: The v401 fallback must not replace an already complete,
+            // verified-name email with a trailing PDF text fragment (e.g. nklin).
+            // This is a preservation guard, NOT a generic whitespace joiner.
+            // Require first name AND a full surname component in the existing
+            // local part, and reject only candidates missing those anchors.
+            if (broken.length === 1 && existing && broken[0] !== existing) {
+                const first = String((document.getElementById('txtFirstNameDataEntry') ||
+                    document.getElementById('txtFirstName'))?.value || '').toLowerCase()
+                    .replace(/[^a-z]/g, '');
+                const surname = String((document.getElementById('txtLastNameDataEntry') ||
+                    document.getElementById('txtLastName'))?.value || '').toLowerCase();
+                const surnameParts = surname.split(/[-\s]+/).map(x => x.replace(/[^a-z]/g, ''))
+                    .filter(x => x.length >= 4);
+                const local = existing.split('@')[0].replace(/[^a-z]/g, '');
+                const candidateLocal = broken[0].split('@')[0].replace(/[^a-z]/g, '');
+                const validEmail = /^[a-z0-9._%+\-]+@[a-z0-9.-]+\.[a-z]{2,24}$/i;
+                if (first.length >= 3 && surnameParts.length && validEmail.test(existing) &&
+                    local.includes(first) && surnameParts.some(x => local.includes(x)) &&
+                    (!candidateLocal.includes(first) ||
+                     !surnameParts.some(x => candidateLocal.includes(x)))) {
+                    console.info(`Toolbar EMAIL v502: preserved existing verified-name email; rejected incomplete v401 fragment "${broken[0]}".`);
+                    frt7FbsplEmailStatus();
+                    return true;
+                }
             }
             if (broken.length === 1 && !isManualContactLocked('email', emailInput) &&
                 !shouldBlockProtectedEmailChange(existing, broken[0])) {
