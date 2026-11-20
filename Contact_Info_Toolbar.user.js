@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.498
+// @version      9.6.499
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -498,7 +498,11 @@ function sanitizeEmail(email) {
                 VA:'Virginia', WA:'Washington', WV:'West Virginia', WI:'Wisconsin', WY:'Wyoming',
                 DC:'District of Columbia'
             };
-            const zipState = frt7StateFromZipV171(zipField);
+            // v499: This sanitizer is outside the location module's private scope.
+            // Only use the independently verifiable NC ZIP range here;
+            // do not call the inaccessible frt7StateFromZipV171 helper.
+            const zipPrefix = Number(zipField.slice(0, 3));
+            const zipState = zipPrefix >= 270 && zipPrefix <= 289 ? 'NC' : '';
             const stateName = stateNames[zipState];
             const stateTail = stateName?.split(' ').pop()?.toLowerCase();
             const prefix = stateTail ? stateTail + zipField : '';
