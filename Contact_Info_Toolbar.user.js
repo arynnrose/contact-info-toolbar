@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.494
+// @version      9.6.495
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6268,6 +6268,52 @@ function fillNameFieldsWithLoadRetries() {
         // Prefer the already-correct contact email when the repaired resume
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
+        // v495: Name-verified split local-part repair, before the generic v401
+        // extractor can mistakenly accept only the last fragment (re1@yahoo.com).
+        // Only joins actual adjacent resume tokens; NEVER inserts name letters.
+        if (frt7IsFbsplSource()) {
+            const first = String(document.getElementById('txtFirstNameDataEntry')?.value || document.getElementById('txtFirstName')?.value || '').trim().toLowerCase();
+            const last = String(document.getElementById('txtLastNameDataEntry')?.value || document.getElementById('txtLastName')?.value || '').trim().toLowerCase();
+            if (/^[a-z]{4,}$/.test(first) && /^[a-z]{4,}$/.test(last)) {
+                const sources = [document.getElementById('txtResumeRaw')?.value,
+                    getIframeResumeTextForRareFallback(), getResumeText()].filter(Boolean);
+                const candidates = new Set();
+                for (const source of sources) {
+                    const raw = String(source).replace(/[\u00a0\u2007\u202f]/g, ' ');
+                    const stop = raw.search(/\b(?:Summary|Objective|Work Experience|Work History|Professional Experience|Education|Skills|Work Authorization|Willing to relocate)\b/i);
+                    const header = (stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 450)).slice(0, 800);
+                    // Example: moore_tor re1@yahoo.com => moore_torre1@yahoo.com.
+                    // The left token must include a complete surname and a first-name
+                    // prefix, and the right token must finish that exact first name.
+                    const re = /(^|[^a-z0-9._%+\-@])([a-z][a-z0-9._%+\-]*)[ \t]+([a-z0-9._%+\-]+)@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\.com(?=$|[^a-z0-9.\-])/gi;
+                    for (const m of header.matchAll(re)) {
+                        const left = m[2].toLowerCase(), right = m[3].toLowerCase();
+                        const joined = left + right;
+                        // Require a complete first-name occurrence split ACROSS
+                        // the gap, plus surname already present (no duplication).
+                        const pos = joined.indexOf(first);
+                        if (pos < 0 || !(pos < left.length && pos + first.length > left.length)) continue;
+                        if (!joined.includes(last) || !left.includes(last)) continue;
+                        if (joined.indexOf(last) !== joined.lastIndexOf(last)) continue;
+                        if (!/^[a-z0-9._%+\-]+$/.test(joined)) continue;
+                        candidates.add(joined + '@' + m[4].toLowerCase() + '.com');
+                    }
+                }
+                if (candidates.size === 1) {
+                    const confirmed = [...candidates][0];
+                    const actual = String(emailInput.value || '').trim();
+                    if (actual.toLowerCase() === confirmed) return true;
+                    if (!isManualContactLocked('email', emailInput) &&
+                        !shouldBlockProtectedEmailChange(actual, confirmed) &&
+                        !isObviousOcrEmailDomainIssue(confirmed)) {
+                        runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v495: joined name-verified split email: "${actual}" -> "${confirmed}".`);
+                        return true;
+                    }
+                }
+            }
+        }
         if (frt7IsFbsplSource()) {
             // v494: Repair a single whitespace gap AFTER the domain dot in a
             // known-provider contact email (e.g. k.wash03@aol. com).
