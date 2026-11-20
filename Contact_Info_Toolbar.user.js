@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.500
+// @version      9.6.501
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -700,7 +700,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.500";
+    const FRT7_BUILD_ID = "9.6.501";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -6345,6 +6345,63 @@ function fillNameFieldsWithLoadRetries() {
         // Prefer the already-correct contact email when the repaired resume
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
+        // v501: Exact verified-name boundary repair. No generic whitespace joining.
+        // Accept a single gap ONLY when it splits a verified first name or a
+        // verified surname component (including hyphenated surnames).
+        if (frt7IsFbsplSource()) {
+            const first = String(document.getElementById('txtFirstNameDataEntry')?.value || document.getElementById('txtFirstName')?.value || '').trim().toLowerCase();
+            const last = String(document.getElementById('txtLastNameDataEntry')?.value || document.getElementById('txtLastName')?.value || '').trim().toLowerCase();
+            const nameParts = [first, ...last.split(/[\s\-']+/)].filter(n => /^[a-z]{4,}$/.test(n));
+            const sources = [document.getElementById('txtResumeRaw')?.value,
+                getIframeResumeTextForRareFallback(), getResumeText()].filter(Boolean);
+            const candidates = new Set();
+            if (/^[a-z]{4,}$/.test(first) && nameParts.length >= 2) {
+                for (const source of sources) {
+                    const raw = String(source).replace(/[\u00a0\u2007\u202f]/g, ' ');
+                    const stop = raw.search(/\b(?:Summary|Objective|Work Experience|Work History|Professional Experience|Education|Skills|Work Authorization|Willing to relocate)\b/i);
+                    const header = (stop >= 0 ? raw.slice(0, stop) : raw.slice(0, 650)).slice(0, 650);
+                    const re = /(^|[^a-z0-9._%+\-@])([a-z][a-z0-9._%+\-]*)[ \t]([a-z0-9._%+\-]+)@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\.com(?=$|[^a-z0-9.\-])/gi;
+                    for (const m of header.matchAll(re)) {
+                        const left = m[2].toLowerCase(), right = m[3].toLowerCase();
+                        const joined = left + right;
+                        // Boundary must lie strictly INSIDE a verified name component.
+                        // A separate full name or city word can never qualify.
+                        const validSplit = nameParts.some(name => {
+                            for (let i = 2; i <= name.length - 2; i++) {
+                                if (left.endsWith(name.slice(0, i)) && right.startsWith(name.slice(i))) return true;
+                            }
+                            return false;
+                        });
+                        if (!validSplit || !joined.includes(first)) continue;
+                        if (!last.split(/[\s\-']+/).some(part => part.length >= 4 && joined.includes(part.toLowerCase()))) continue;
+                        const candidate = joined + '@' + m[4].toLowerCase() + '.com';
+                        if (!isObviousOcrEmailDomainIssue(candidate)) candidates.add(candidate);
+                    }
+                }
+            }
+            if (candidates.size === 1) {
+                const confirmed = [...candidates][0];
+                const actual = String(emailInput.value || '').trim();
+                if (actual.toLowerCase() === confirmed) {
+                    console.info('Toolbar EMAIL v501: verified name-split resume email already matches contact; preserving it.');
+                    frt7FbsplEmailStatus();
+                    return true;
+                }
+                if (!isManualContactLocked('email', emailInput) &&
+                    !shouldBlockProtectedEmailChange(actual, confirmed)) {
+                    runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                    frt7FbsplEmailStatus();
+                    console.info(`Toolbar EMAIL v501: recovered verified-name split: "${actual}" -> "${confirmed}".`);
+                    return true;
+                }
+                console.info('Toolbar EMAIL v501: name-verified candidate blocked by existing email protection.');
+                return false;
+            }
+            if (candidates.size > 1) {
+                console.warn('Toolbar EMAIL v501: ambiguous name-verified split candidates; preserving contact email.');
+                return false;
+            }
+        }
         // v495: Name-verified split local-part repair, before the generic v401
         // extractor can mistakenly accept only the last fragment (re1@yahoo.com).
         // Only joins actual adjacent resume tokens; NEVER inserts name letters.
