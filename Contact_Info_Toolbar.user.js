@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.492
+// @version      9.6.493
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -6269,6 +6269,47 @@ function fillNameFieldsWithLoadRetries() {
         // PDF version matches; otherwise replace it only for one unambiguous
         // broken address. Never infer from multiple different candidates.
         if (frt7IsFbsplSource()) {
+            // v493: A PDF-converted FBSPL contact header can contain "name@ yahoo.com"
+            // without pipe separators. Repair ONLY a single whitespace gap after @,
+            // with an isolated complete known-provider address before resume sections.
+            // Never join words before @, alter unknown domains, or guess addresses.
+            const sources = [
+                document.getElementById('txtResumeRaw')?.value,
+                getIframeResumeTextForRareFallback(),
+                getResumeText()
+            ].filter(Boolean);
+            const candidates = new Set();
+            let conflicting = false;
+            for (const source of sources) {
+                const raw = String(source).replace(/[\u00a0\u2007\u202f]/g, ' ');
+                const start = raw.search(/\b(?:Summary|Objective|Work Experience|Work History|Professional Experience|Education|Skills)\b/i);
+                const header = (start >= 0 ? raw.slice(0, start) : raw.slice(0, 500)).slice(0, 800);
+                const gap = /(^|[^A-Za-z0-9._%+\-@])([A-Za-z][A-Za-z0-9._%+\-]*@)[ \t]+(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|aol|icloud)\.com(?=$|[^A-Za-z0-9.\-])/gi;
+                const intact = /(^|[^A-Za-z0-9._%+\-@])([A-Za-z0-9._%+\-]+@[A-Za-z0-9.-]+\.(?:com|net|org|edu|gov))(?=$|[^A-Za-z0-9.\-])/gi;
+                const local = new Set();
+                for (const m of header.matchAll(gap)) local.add((m[2] + m[3] + '.com').toLowerCase());
+                for (const m of header.matchAll(intact)) local.add(m[2].toLowerCase());
+                if (local.size > 1) conflicting = true;
+                for (const value of local) candidates.add(value);
+            }
+            if (!conflicting && candidates.size === 1) {
+                const confirmed = [...candidates][0];
+                // Require that the candidate really arose from the exact @-space
+                // pattern, not merely an intact email elsewhere in the header.
+                const gapProof = new RegExp(confirmed.split('@')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '@[ \t]+' + confirmed.split('@')[1].replace(/\./g, '\\.').replace(/\-/g, '\\-'), 'i');
+                if (sources.some(src => gapProof.test(String(src).slice(0, 800)))) {
+                    const actual = String(emailInput.value || '').trim();
+                    if (actual.toLowerCase() === confirmed) return true;
+                    if (!isManualContactLocked('email', emailInput) &&
+                        !shouldBlockProtectedEmailChange(actual, confirmed) &&
+                        !isObviousOcrEmailDomainIssue(confirmed)) {
+                        runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                        frt7FbsplEmailStatus();
+                        console.info(`Toolbar EMAIL v493: repaired single @-space contact-header email: "${actual}" -> "${confirmed}".`);
+                        return true;
+                    }
+                }
+            }
             // v472: Repair exactly one PDF whitespace gap in a known-provider email
             // field: after @, after the domain dot, or inside a known provider.
             // Require one isolated pipe-delimited header candidate; never join
