@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.497
+// @version      9.6.498
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -476,6 +476,49 @@ function sanitizeEmail(email) {
             }
         }
     }
+    // v498: Remove a location prefix ONLY when the contact header proves that
+    // a full state name and its verified ZIP were flattened into the email.
+    // Never remove arbitrary city words or ZIP-like digits from valid usernames.
+    try {
+        const at = clean.indexOf('@');
+        const zipField = String(document.getElementById('txtZipDataEntry')?.value ||
+            document.getElementById('txtZip')?.value || '').trim().slice(0, 5);
+        if (at > 0 && /^\d{5}$/.test(zipField)) {
+            const local = clean.slice(0, at);
+            const stateNames = {
+                AL:'Alabama', AK:'Alaska', AZ:'Arizona', AR:'Arkansas', CA:'California',
+                CO:'Colorado', CT:'Connecticut', DE:'Delaware', FL:'Florida', GA:'Georgia',
+                HI:'Hawaii', ID:'Idaho', IL:'Illinois', IN:'Indiana', IA:'Iowa', KS:'Kansas',
+                KY:'Kentucky', LA:'Louisiana', ME:'Maine', MD:'Maryland', MA:'Massachusetts',
+                MI:'Michigan', MN:'Minnesota', MS:'Mississippi', MO:'Missouri', MT:'Montana',
+                NE:'Nebraska', NV:'Nevada', NH:'New Hampshire', NJ:'New Jersey', NM:'New Mexico',
+                NY:'New York', NC:'North Carolina', ND:'North Dakota', OH:'Ohio', OK:'Oklahoma',
+                OR:'Oregon', PA:'Pennsylvania', RI:'Rhode Island', SC:'South Carolina',
+                SD:'South Dakota', TN:'Tennessee', TX:'Texas', UT:'Utah', VT:'Vermont',
+                VA:'Virginia', WA:'Washington', WV:'West Virginia', WI:'Wisconsin', WY:'Wyoming',
+                DC:'District of Columbia'
+            };
+            const zipState = frt7StateFromZipV171(zipField);
+            const stateName = stateNames[zipState];
+            const stateTail = stateName?.split(' ').pop()?.toLowerCase();
+            const prefix = stateTail ? stateTail + zipField : '';
+            const raw = String(document.getElementById('txtResumeRaw')?.value ||
+                getIframeResumeTextForRareFallback() || '').slice(0, 650);
+            const escaped = stateName?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const evidence = escaped && new RegExp('\\b' + escaped + '\\s*' + zipField +
+                '([A-Za-z][A-Za-z0-9._%+\\-]*)@', 'i').exec(raw);
+            if (prefix && local.toLowerCase().startsWith(prefix) && evidence &&
+                local.slice(prefix.length).toLowerCase() === evidence[1].toLowerCase() &&
+                /^[a-z][a-z0-9._%+\-]{2,}$/i.test(evidence[1])) {
+                const repaired = evidence[1] + clean.slice(at);
+                console.info(`Toolbar EMAIL v498: stripped verified state/ZIP header prefix: "${clean}" -> "${repaired}".`);
+                clean = repaired;
+            }
+        }
+    } catch (error) {
+        console.warn('Toolbar EMAIL v498: location-prefix check skipped safely:', error?.message || error);
+    }
+
     // Preserve Apple relay handling, then normalize casing.
     clean = clean.replace(/\.appleid\.com.*$/i, ".appleid.com");
     return frt7StripExactContactZipEmailPrefix(frt7StripFullContactPhoneEmailPrefix(clean)).toLowerCase();
