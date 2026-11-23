@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.505
+// @version      9.6.506
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -731,7 +731,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.505";
+    const FRT7_BUILD_ID = "9.6.506";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -6412,6 +6412,25 @@ function fillNameFieldsWithLoadRetries() {
                     const value = sanitizeEmail(match[2]);
                     if (/^[a-z0-9._%+\-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$/i.test(value) &&
                         !isObviousOcrEmailDomainIssue(value)) candidates.add(value.toLowerCase());
+                }
+            }
+            // v506: FBSPL/Indeed PDF whitespace can split a correct email's local
+            // part, causing the intact-address regex above to see only its tail.
+            // Verify the existing contact against the header with whitespace
+            // removed BEFORE considering a shorter extracted candidate.
+            if (frt7IsFbsplSource()) {
+                const existing = String(emailInput.value || '').trim().toLowerCase();
+                if (/^[a-z0-9._%+\-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$/i.test(existing) &&
+                    !isObviousOcrEmailDomainIssue(existing)) {
+                    const matched = headerSources.some(source => {
+                        const header = source.slice(0, 900).split(/\b(?:PROFESSIONAL\s+SUMMARY|WORK\s+EXPERIENCE|CORE\s+SKILLS|EDUCATION|QUALIFICATIONS)\b/i)[0].slice(0, 650);
+                        const compact = header.replace(/[\s\u00a0\u2007\u202f]+/g, '').toLowerCase();
+                        return compact.includes(existing);
+                    });
+                    if (matched) {
+                        console.info(`Toolbar EMAIL v506: existing contact email confirmed in whitespace-normalized FBSPL/Indeed resume header; preserving "${existing}".`);
+                        return true;
+                    }
                 }
             }
             if (candidates.size === 1) {
