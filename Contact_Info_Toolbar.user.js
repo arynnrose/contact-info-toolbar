@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.502
+// @version      9.6.503
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -566,6 +566,37 @@ function frt7RemoveAppendedWebsite(email) {
     else repair();
 })();
 
+// v503: The site can prefill a malformed address before Auto Email runs.
+// Repair a recognized complete TLD with an immediately glued alphabetic word.
+// Only strip a suffix when the complete email prefix is unambiguous.
+(function frt7GuardExistingGluedEmailTail() {
+    if (window.top !== window.self) return;
+    let busy = false;
+    function repair() {
+        if (busy) return;
+        const input = document.getElementById("txtEmail");
+        if (!input) return;
+        const before = String(input.value || "").trim();
+        const after = sanitizeEmail(before);
+        if (after === before.toLowerCase() || !before.toLowerCase().startsWith(after)) return;
+        const tail = before.slice(after.length);
+        if (!/^[A-Za-z][A-Za-z0-9]*$/.test(tail)) return;
+        if (!/\.(?:com|net|org|edu|gov|mil|int|info|biz|io|us)$/i.test(after)) return;
+        busy = true;
+        try {
+            input.value = after;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            console.info(`Toolbar EMAIL v503: removed glued text after completed email: "${before}" -> "${after}".`);
+        } finally { busy = false; }
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", repair, { once: true });
+    else repair();
+    // Catch delayed site population; do not continuously rewrite user edits.
+    let checks = 0;
+    const timer = setInterval(() => { repair(); if (++checks >= 20) clearInterval(timer); }, 500);
+})();
+
 // v470: Existing site contact values can already contain a phone prefix before Auto runs.
 // Repair those values as well; do not wait for a recovered resume candidate.
 (function frt7GuardExistingEmailPhonePrefix() {
@@ -700,7 +731,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.502";
+    const FRT7_BUILD_ID = "9.6.503";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -5867,6 +5898,19 @@ function fillNameFieldsWithLoadRetries() {
                domain.endsWith(".edu");
     }
 
+    // v503: Only a proven trailing attachment may be removed from an existing
+    // protected email. The proposed email must be the exact prefix of the current
+    // value, ending in a recognized complete TLD. Never change the username/domain.
+    function frt7IsExactGluedEmailTailRepair(current, proposed) {
+        const before = String(current || "").trim().toLowerCase();
+        const after = String(proposed || "").trim().toLowerCase();
+        if (!after || !before.startsWith(after) || before.length <= after.length) return false;
+        if (!/^[a-z0-9._%+\-]+@[a-z0-9.-]+\.(?:com|net|org|edu|gov|mil|int|info|biz|io|us)$/i.test(after)) return false;
+        // A concatenated next word (as in .eduOpen) is not part of the email.
+        // Do not remove a legitimate subdomain or an extra dotted domain label.
+        return /^[a-z][a-z0-9]*$/i.test(before.slice(after.length));
+    }
+
     function shouldBlockProtectedEmailChange(currentEmail, proposedEmail) {
         const current = String(currentEmail || "").trim().toLowerCase();
         const proposed = String(proposedEmail || "").trim().toLowerCase();
@@ -5924,6 +5968,11 @@ function fillNameFieldsWithLoadRetries() {
                 console.info(`Toolbar EMAIL v481: allowed verified .edu-to-.edu replacement: "${current}" -> "${proposed}".`);
                 return false;
             }
+        }
+
+        if (frt7IsExactGluedEmailTailRepair(current, proposed)) {
+            console.info(`Toolbar EMAIL v503: allowed exact glued-tail cleanup: "${current}" -> "${proposed}".`);
+            return false;
         }
 
         // Otherwise preserve the existing protected-destination rule.
