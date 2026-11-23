@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.504
+// @version      9.6.505
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -731,7 +731,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.504";
+    const FRT7_BUILD_ID = "9.6.505";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -9408,6 +9408,34 @@ function findTrustedLearnedCityInHeader(text) {
     if (explicitContactHeader) {
         console.info(`Toolbar CITY v491: explicit contact City: ${explicitContactHeader.city}, ${explicitContactHeader.state} overrides later employer cities.`);
         return explicitContactHeader;
+    }
+    // v505: A complete applicant street-address segment in the TRUE contact header
+    // outranks later city mentions (including professional qualifications).
+    // Recognize flattened HTML diamond separators and ordinary contact delimiters.
+    // Require a verified ZIP/state AND an exact city/state database pair; fail closed.
+    const v505StreetAddress = (() => {
+        const raw = String(text || '').slice(0, 1800)
+            .replace(/&#(?:9670|x25c6);/gi, ' ♦ ')
+            .replace(/[◆♦•●|]/g, ' | ');
+        const stop = findTrueResumeSectionStop(raw);
+        const head = raw.slice(0, Math.min(stop >= 0 ? stop : 650, 650));
+        const re = /(?:^|\s|[|\n\r])\s*(?:\d{1,6}\s+[A-Za-z0-9.'’\-]+(?:\s+[A-Za-z0-9.'’\-]+){0,7}\s*[|]\s*)([A-Za-z][A-Za-z.'’\-]*(?:\s+[A-Za-z][A-Za-z.'’\-]*){0,3})\s*,?\s+([A-Z]{2})\s*(\d{5})(?:-\d{4})?\b/gi;
+        let match;
+        while ((match = re.exec(head))) {
+            const city = normalizeContactDisplayCase(match[1]);
+            const state = match[2].toUpperCase();
+            const zip = match[3];
+            if (frt7StateFromZipV171(zip) !== state) continue;
+            if (!usCityDbLoaded || !isUsCityDatabasePair(city, state)) continue;
+            return {city, state, zip, trusted:true, withState:true,
+                index:match.index, verifiedContactAddress:true};
+        }
+        return null;
+    })();
+    if (v505StreetAddress) {
+        console.info(`Toolbar CITY v505: verified street-address contact header -> ${v505StreetAddress.city}, ${v505StreetAddress.state} ${v505StreetAddress.zip}; ignoring later city mentions.`);
+        frt7SetAuthoritativeHeaderLocation(v505StreetAddress, 'v505 verified street address');
+        return v505StreetAddress;
     }
     const v490Contact = frt7VerifiedContactZipHeaderV490();
     if (v490Contact) return v490Contact;
