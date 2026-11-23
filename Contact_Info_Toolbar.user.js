@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.503
+// @version      9.6.504
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -731,7 +731,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.503";
+    const FRT7_BUILD_ID = "9.6.504";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -6386,6 +6386,49 @@ function fillNameFieldsWithLoadRetries() {
         if (!email && !frt7IsFbsplSource()) {
             console.warn("Toolbar: no email found.");
             return false;
+        }
+
+        // v504: A single explicit, intact address in the rendered resume's
+        // contact header takes precedence over an obsolete site contact address.
+        // This runs BEFORE source-specific FBSPL whitespace reconstruction, which
+        // otherwise returns false even when the header contains a perfect email.
+        // Never join separated tokens or guess a provider. Conflicts are no-touch.
+        {
+            const headerSources = [];
+            try {
+                const frame = document.querySelector('iframe[src*="displayresumetext.asp"]') ||
+                    document.querySelector('#divResumeContainer iframe');
+                const doc = frame?.contentDocument || frame?.contentWindow?.document;
+                const rendered = String(doc?.body?.innerText || '');
+                if (rendered.trim()) headerSources.push(rendered);
+            } catch (_) {}
+            const raw = String(document.getElementById('txtResumeRaw')?.value || '');
+            if (raw.trim()) headerSources.push(raw);
+            const candidates = new Set();
+            for (const source of headerSources) {
+                const header = source.slice(0, 900).split(/\b(?:PROFESSIONAL\s+SUMMARY|WORK\s+EXPERIENCE|CORE\s+SKILLS|EDUCATION|QUALIFICATIONS)\b/i)[0].slice(0, 650);
+                const regex = /(^|[^A-Z0-9._%+\-@])([A-Z0-9._%+\-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.(?:com|net|org|edu|gov|mil|int|info|biz|io|us|me|co|app|dev|ai|ca|uk|co\.uk|org\.uk))(?=$|[^A-Z0-9.\-])/gi;
+                for (const match of header.matchAll(regex)) {
+                    const value = sanitizeEmail(match[2]);
+                    if (/^[a-z0-9._%+\-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$/i.test(value) &&
+                        !isObviousOcrEmailDomainIssue(value)) candidates.add(value.toLowerCase());
+                }
+            }
+            if (candidates.size === 1) {
+                const confirmed = [...candidates][0];
+                const existing = String(emailInput.value || '').trim();
+                if (existing.toLowerCase() === confirmed.toLowerCase()) return true;
+                if (!isManualContactLocked('email', emailInput) &&
+                    !shouldBlockProtectedEmailChange(existing, confirmed)) {
+                    runInternalEmailWrite(() => { emailInput.value = confirmed; triggerEvents(emailInput); });
+                    console.info(`Toolbar EMAIL v504: verified unique resume header email: "${existing}" -> "${confirmed}".`);
+                    return true;
+                }
+                console.info('Toolbar EMAIL v504: unique header email blocked by manual/protected lock.');
+            } else if (candidates.size > 1) {
+                console.warn('Toolbar EMAIL v504: conflicting header emails; preserving existing contact.');
+                return false;
+            }
         }
 
         // v411: whitespace-gap candidate reconstruction is strictly limited to
