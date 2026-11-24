@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.510
+// @version      9.6.511
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -11469,6 +11469,46 @@ function frt7CareerBuilderValidLocationMustStay(reason = "auto location") {
 // keep that pair even when the ZIP is wrong/missing. Repair ONLY the ZIP by using
 // the existing City, State in Lookup Zip. Do not replace the pair from resume
 // header parsing or phone Area fallback.
+// v511: One settled ZIP attempt per applicant/source pair, then the real Area button.
+let frt7SourceZipAttemptV511 = null;
+function frt7QueueSourceZipAreaV511(city, state) {
+    if (!frt7IsCareerBuilderSource()) return false;
+    const key = getApplicantLifecycleKey();
+    if (!key) return false;
+    const signature = JSON.stringify([key, city.toLowerCase(), state]);
+    if (frt7SourceZipAttemptV511?.signature === signature) return true;
+    const attempt = { signature };
+    frt7SourceZipAttemptV511 = attempt;
+    console.info(`Toolbar AREA v511: waiting for source ZIP lookup for ${city}, ${state}.`);
+    setTimeout(async () => {
+        try {
+            if (frt7SourceZipAttemptV511 !== attempt || getApplicantLifecycleKey() !== key) return;
+            const stored = await browser.storage.local.get([AUTO_KEY, AUTO_FIELDS_KEY]);
+            const fields = { ...DEFAULT_AUTO_FIELDS, ...(stored[AUTO_FIELDS_KEY] || {}) };
+            if (!stored[AUTO_KEY] || !fields.city || !fields.zipLookup || getApplicantLifecycleKey() !== key) return;
+            const c = document.getElementById("txtCityDataEntry"), st = document.getElementById("txtStateDataEntry"), z = document.getElementById("txtZipDataEntry");
+            if (!c || !st || !z || frt7HumanTouchedLocation() || [ ["city",c], ["state",st], ["zip",z] ].some(([f,e]) => isManualContactLocked(f,e))) return;
+            if (normalizeContactDisplayCase(c.value).toLowerCase() !== city.toLowerCase() || st.value.trim().toUpperCase() !== state) return;
+            const status = getWebsiteZipStatus();
+            if (!["blank", "mismatch", "unresolvedzip"].includes(status)) return;
+            if (frt7GetValidPreAutoLocationSnapshot() || frt7CurrentPairIsExplicitInTrueHeaderV193(city,state) || frt7TrustedHeaderPairBypassesSourceProtection() || frt7VerifiedContactZipHeaderV490() || frt7WordCodeContactAddress() || frt7VerifiedAreaContactHeaderV489() || frt7ExplicitHeaderZipCorrection()) return;
+            if (isUsCityDatabasePair(city,state)) { console.info("Toolbar AREA v511: preserving verified city/state after ZIP failure."); return; }
+            const phone = String(getAreaSourcePhone() || "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+            if (!/^[2-9]\d{9}$/.test(phone)) return;
+            const btn = document.getElementById("frt7-location-btn");
+            if (!btn) return;
+            console.info(`Toolbar AREA v511: source ZIP lookup failed (${status}); clicking Area for ${city}, ${state}.`);
+            btn.click();
+            setTimeout(() => {
+                if (getApplicantLifecycleKey() !== key) return;
+                const changed = c.value.trim().toLowerCase() !== city.toLowerCase() || st.value.trim().toUpperCase() !== state;
+                console.info(`Toolbar AREA v511: Area ${changed ? "changed location" : "did not change location"} -> ${c.value}, ${st.value}.`);
+            }, 2300);
+        } catch (e) { console.warn("Toolbar AREA v511: source recovery failed", e); }
+    }, 2500);
+    return false;
+}
+
 function frt7SourceCityStateZipRepair(reason = "auto ZIP repair") {
     const sourceName = frt7IsCareerBuilderSource() ? "Career Builder" : (frt7IsResumeLibrarySource() ? "Resume Library" : "");
     if (!sourceName || !frt7SourceProtectionAllowed()) return false;
@@ -11488,6 +11528,8 @@ function frt7SourceCityStateZipRepair(reason = "auto ZIP repair") {
 
     // Manual ZIP edits remain authoritative, just like the rest of the toolbar.
     if (isManualContactLocked("zip", zipInput)) return false;
+
+    if (frt7QueueSourceZipAreaV511(city, state)) return true;
 
     // Preserve City/State exactly in meaning (only harmless display casing/state case).
     if (String(cityInput.value || "").trim() !== city) {
@@ -13120,6 +13162,7 @@ function fillAutoCityStateFromResume(fields = {}) {
                 (zipState && zipState !== state);
 
             if (wantsZipLookup && zipNeedsRepair && zipInput && lookupInput && !isManualContactLocked("zip", zipInput)) {
+                if (frt7QueueSourceZipAreaV511(city, state)) return true;
                 if (zip) { zipInput.value = ""; triggerEvents(zipInput); }
                 lookupInput.value = `${city}, ${state}`;
                 fireZipLookupEnter(lookupInput);
