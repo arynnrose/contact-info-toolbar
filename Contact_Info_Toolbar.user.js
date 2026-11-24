@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.508
+// @version      9.6.509
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -4928,6 +4928,16 @@ function fillNameFields(options = {}) {
         console.info(`Toolbar NAME v469: protected existing surname "${existingLastS}" against trailing-S candidate "${name.last}".`);
         name.last = existingLastS;
     }
+    // v509: overlapping PDF text layers can repeat an entire name token.
+    // Only collapse when the existing field independently confirms the exact half.
+    for (const [key, input] of [["first", firstInput], ["last", lastInput]]) {
+        const existing = String(input.value || "").trim();
+        const proposed = String(name[key] || "").trim();
+        if (existing.length >= 2 && proposed.toLowerCase() === (existing + existing).toLowerCase()) {
+            console.info(`Toolbar NAME v509: preserved existing ${key} against duplicated header token.`);
+            name[key] = existing;
+        }
+    }
     traceAuto("NORMALIZED CANDIDATE", `first=${JSON.stringify(name.first)} last=${JSON.stringify(name.last)}`);
     // v398: Do not replace a full first name with the combined initials of
     // the existing first and last names (Domonique Williams -> DW Williams).
@@ -9590,16 +9600,17 @@ function findTrustedLearnedCityInHeader(text) {
         // city, e.g. "LeaderPhiladelphia, PA". The city itself and matching state
         // remain exact; only the LEFT boundary is relaxed.
         const withState = new RegExp(
-            "(^|[^A-Za-zÀ-ÖØ-öø-ÿ])(" + cityPattern + ")\\s*,?\\s*(" + stateChoices + ")\\b",
+            "(^|[^A-Za-zÀ-ÖØ-öø-ÿ])(" + cityPattern + ")\\s*(?:,\\s*|\\s+)(" + stateChoices + ")\\b",
             "i"
         );
         let strong = withState.exec(head);
         let strongState = strong ? strong[3] : "";
-        let strongIndex = strong ? strong.index : -1;
+        let strongIndex = strong ? strong.index + strong[1].length : -1;
+        let gluedRecovery = false;
 
         if (!strong) {
             const gluedWithState = new RegExp(
-                "(" + cityPattern + ")\\s*,?\\s*(" + stateChoices + ")\\b",
+                "(" + cityPattern + ")\\s*,\\s*(" + stateChoices + ")\\b",
                 "i"
             );
             const glued = gluedWithState.exec(head);
@@ -9607,6 +9618,7 @@ function findTrustedLearnedCityInHeader(text) {
                 strong = glued;
                 strongState = glued[2];
                 strongIndex = glued.index;
+                gluedRecovery = true;
             }
         }
 
@@ -9619,14 +9631,14 @@ function findTrustedLearnedCityInHeader(text) {
             const compactSavedState = String(entry.state || "").trim().toUpperCase();
             if (compactSavedState) {
                 const compactWithState = new RegExp(
-                    "(" + compactCityPattern + ")\\s*,?\\s*(" + escapeRegex(compactSavedState) + ")\\b",
+                    "(^|[^A-Za-zÀ-ÖØ-öø-ÿ])(" + compactCityPattern + ")\\s*(?:,\\s*|\\s+)(" + escapeRegex(compactSavedState) + ")\\b",
                     "i"
                 );
                 const compact = compactWithState.exec(head);
                 if (compact) {
                     strong = compact;
-                    strongState = compact[2];
-                    strongIndex = compact.index;
+                    strongState = compact[3];
+                    strongIndex = compact.index + compact[1].length;
                 }
             }
         }
@@ -9689,7 +9701,7 @@ function findTrustedLearnedCityInHeader(text) {
                     learned: true,
                     trusted: true,
                     withState: true,
-                    index: strongIndex
+                    index: strongIndex, gluedRecovery
                 });
                 continue;
             }
@@ -9978,7 +9990,7 @@ function findTrustedLearnedCityInHeader(text) {
     const filteredPool = winnerPool.filter(shorter =>
         !winnerPool.some(longer => overlappingSuffix(shorter, longer))
     );
-    filteredPool.sort((a,b) => a.index - b.index || b.city.length - a.city.length);
+    filteredPool.sort((a,b) => Number(!!a.gluedRecovery) - Number(!!b.gluedRecovery) || a.index - b.index || b.city.length - a.city.length);
     const winner = filteredPool[0];
     const v462Suffix = frt7SavedCitySuffixV462(winner.city, winner.state);
     if (v462Suffix) {
