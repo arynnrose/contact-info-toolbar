@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.507
+// @version      9.6.508
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -10338,11 +10338,16 @@ function extractCityStateFromHeader(text) {
     return findMilitaryInstallationInHeader(text);
 }
 
+// v508: unmistakable occupational phrases, not arbitrary unknown towns.
+function frt7ObviousRoleCityV508(city) {
+    return /\b(?:real\s+estate|property\s+management|customer\s+service|administrative|medical|financial|insurance|sales)\s+(?:agent|broker|realtor|assistant|representative|advisor|consultant|manager|specialist|associate)\b|^(?:realtor|real estate agent|broker|registered nurse|software engineer|account executive|project manager|delivery driver)$/i.test(String(city || '').trim());
+}
+
 function isSafeAutoCity(loc) {
     if (!loc || !loc.city || !loc.state) return false;
 
     const city = String(loc.city).trim();
-    if (!city) return false;
+    if (!city || frt7ObviousRoleCityV508(city)) return false;
 
     // Auto mode must not treat an employer/job line as the applicant's city.
     // Examples rejected: "Frontline Insurance at Niceville", "Manager at Orlando".
@@ -11445,7 +11450,7 @@ function frt7SourceCityStateZipRepair(reason = "auto ZIP repair") {
 
     const city = normalizeContactDisplayCase(String(cityInput.value || "").trim());
     const state = String(stateInput.value || "").trim().toUpperCase();
-    if (!city || !/^[A-Z]{2}$/.test(state)) return false;
+    if (!city || frt7ObviousRoleCityV508(city) || !/^[A-Z]{2}$/.test(state)) return false;
 
     const status = getWebsiteZipStatus();
     if (status !== "mismatch" && status !== "unresolvedzip" && status !== "blank") return false;
@@ -12859,11 +12864,11 @@ function queueAreaRecoveryAfterZipFailure(reason = "ZIP lookup returned no ZIP")
         frt7AreaRecoveryTimer = null;
 
         const currentKey = getApplicantLifecycleKey();
-        if (!currentKey || (frt7AreaRecoveryKey && currentKey !== frt7AreaRecoveryKey)) return;
+        if (!currentKey || currentKey !== startKey) return;
 
         const stored = await browser.storage.local.get([AUTO_KEY, AUTO_FIELDS_KEY]);
         const fields = { ...DEFAULT_AUTO_FIELDS, ...(stored[AUTO_FIELDS_KEY] || {}) };
-        if (!stored[AUTO_KEY] || !fields.city) return;
+        if (!stored[AUTO_KEY] || !fields.city || getApplicantLifecycleKey() !== startKey) return;
 
         const cityInput = document.getElementById("txtCityDataEntry");
         const stateInput = document.getElementById("txtStateDataEntry");
@@ -12990,12 +12995,17 @@ function queueAreaRecoveryAfterZipFailure(reason = "ZIP lookup returned no ZIP")
         areaBtn.click();
         console.info(`Toolbar AREA v406: click dispatched; result=${String(cityInput.value || "").trim()}, ${String(stateInput.value || "").trim()}; ZIP=${String(zipInput.value || "").trim() || "blank"}.`);
 
+        if (normalizeContactDisplayCase(String(cityInput.value || "").trim()) !== currentCity || String(stateInput.value || "").trim().toUpperCase() !== currentState) {
+            console.info("Toolbar AREA v508: verified City/State changed; Area owns ZIP retries.");
+            return;
+        }
         if (Date.now() - frt7AreaRecoveryStartedAt < 2000) {
             frt7AreaRecoveryTimer = setTimeout(attempt, 700);
         }
     };
 
-    frt7AreaRecoveryTimer = setTimeout(attempt, 250);
+    // v508: start immediately; repeated Auto passes must not starve the fallback.
+    void attempt().catch(err => console.warn("Toolbar AREA v508: recovery failed", err));
 }
 
 function fillAutoCityStateFromResume(fields = {}) {
@@ -16150,7 +16160,7 @@ document.getElementById("frt7-reset-bg")
                     !hasTrustedUsHeaderLocation &&
                     !currentZip &&
                     /^[A-Z]{2}$/.test(currentState) &&
-                    cityRoleWordsAreAllKnownJunk;
+                    (cityRoleWordsAreAllKnownJunk || frt7ObviousRoleCityV508(currentCity));
 
                 // v197.4 CITY-ONLY INCOMPLETE LOCATION FALLBACK:
                 // A nonblank City used to suppress Area even when State AND ZIP were both
