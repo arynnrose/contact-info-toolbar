@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.509
+// @version      9.6.510
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -11389,6 +11389,19 @@ function frt7ApplyVerifiedHeaderZipCorrection(allowCity, allowState) {
     return true;
 }
 
+// v510: A source lock cannot protect a demonstrably suspect City/State pair.
+function frt7InvalidSourcePairV510(city, state) {
+    if (!frt7IsCareerBuilderSource()) return false;
+    if (!city || !/^[A-Z]{2}$/.test(state)) return true;
+    if (frt7ObviousRoleCityV508(city)) return true;
+    if (isCurrentCityStateSavedLearnedPair(city, state) ||
+        frt7CurrentPairIsExplicitInTrueHeaderV193(city, state)) return false;
+    if (!usCityDbLoaded) return false;
+    const key = normalizeLearnedCity(city) + "||";
+    return !isUsCityDatabasePair(city, state) &&
+        Array.from(usCityDbPairSet).some(pair => pair.startsWith(key));
+}
+
 function frt7SourceProtectionAllowed() {
     if (!(frt7IsCareerBuilderSource() || frt7IsResumeLibrarySource())) return false;
     const explicitZipHeader = frt7VerifiedContactZipHeaderV490() || frt7WordCodeContactAddress() || frt7VerifiedAreaContactHeaderV489() || frt7ExplicitHeaderZipCorrection();
@@ -11413,6 +11426,12 @@ function frt7SourceProtectionAllowed() {
         }
         const sourceName = frt7IsCareerBuilderSource() ? "Career Builder" : "Resume Library";
         console.info(`Toolbar AUTO CITY v305: ${sourceName} protection bypassed because trusted/learned header pair exists -> ${trustedHeader.city}, ${trustedHeader.state}.`);
+        return false;
+    }
+    const city = String(document.getElementById("txtCityDataEntry")?.value || "").trim();
+    const state = String(document.getElementById("txtStateDataEntry")?.value || "").trim().toUpperCase();
+    if (frt7InvalidSourcePairV510(city, state)) {
+        console.info(`Toolbar AREA v510: bypassed Career Builder lock for invalid pair ${city}, ${state}.`);
         return false;
     }
     return true;
@@ -12274,6 +12293,8 @@ function runAutoZipLookupFromExistingCityStateOnMismatch() {
             return true;
         }
     }
+
+    if (frt7InvalidSourcePairV510(city, state) && !cityLocked && !stateLocked) return false;
 
     // Manual City/State edits, or cases with no usable phone, retain the prior
     // behavior: use the currently visible safe City/State for a fresh ZIP lookup.
