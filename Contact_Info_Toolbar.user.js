@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Contact Info Toolbar AUTO BUTTON IN SETTINGS
 // @namespace    https://manage.wallstjobs.com/
-// @version      9.6.511
+// @version      9.6.512
 // @description  Version 9.6 toolbar with only the Name detection pipeline restored from 9.9.15.
 // @match        *://manage.wallstjobs.com/*
 // @grant        GM_getValue
@@ -731,7 +731,7 @@ function isUsableTenDigitPhone(digits) {
     // the rejected-name database and the older deletion/tombstone keys.
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_KEY = "frt7_rejected_names_permanent_blacklist_v23";
     const REJECTED_AUTO_NAMES_PERMANENT_BLACKLIST_LOCAL_KEY = "frt7_rejected_names_permanent_blacklist_v23_local";
-    const FRT7_BUILD_ID = "9.6.506";
+    const FRT7_BUILD_ID = "9.6.512";
     const AUTO_SOUND_ENABLED_KEY = "frt7_auto_sound_enabled_v244";
     const AUTO_SOUND_TYPE_KEY = "frt7_auto_sound_type_v244";
     const AUTO_SOUND_VOLUME_KEY = "frt7_auto_sound_volume_v244";
@@ -4321,6 +4321,21 @@ function isAutoNameConfirmed(name) {
     const first = normalizeNameForCompare(name.first).split(" ")[0];
     const last = normalizeNameForCompare(name.last);
     if (!first || !last) return false;
+    // v512: A normalized surname may omit intervening header name tokens.
+    // Accept only the unchanged contact first/last pair and a bounded heading.
+    const currentFirst512 = document.querySelector("#txtFirstNameDataEntry, #txtFirstName")?.value || "";
+    const currentLast512 = document.querySelector("#txtLastNameDataEntry, #txtLastName")?.value || "";
+    if (normalizeNameForCompare(currentFirst512) === normalizeNameForCompare(name.first) &&
+        normalizeNameForCompare(currentLast512) === last) {
+        for (const item of getResumeHeaderLines()) {
+            const line = String(item.text || "").trim();
+            if (!/^[\p{L}\p{M}'’ .-]+$/u.test(line)) continue;
+            const normalized = normalizeNameForCompare(line);
+            const fullFirst = normalizeNameForCompare(name.first);
+            if (normalized.startsWith(fullFirst + " ") &&
+                normalizeNameForCompare(enforceSingleLastName(normalized.slice(fullFirst.length + 1))) === last) return true;
+        }
+    }
     if (name.lateVerifiedHeading) return true; // v425: independently verified, uniquely matched late heading
 
     // Section headings, job words, and resume labels can appear in large bold
@@ -4512,9 +4527,9 @@ function enforceSingleLastName(value) {
     // Test every possible prefix boundary so multi-word prefixes such as
     // "De La" and "Van Der" are retained as well as simple "De".
     for (let prefixLen = parts.length - 1; prefixLen >= 1; prefixLen--) {
-        const prefix = parts.slice(0, prefixLen).join(" ").toUpperCase();
+        const prefix = parts.slice(parts.length - 1 - prefixLen, -1).join(" ").toUpperCase();
         if (NAME_PREFIXES.has(prefix)) {
-            return parts.map(toProper).join(" ");
+            return parts.slice(parts.length - 1 - prefixLen).map(toProper).join(" ");
         }
     }
 
@@ -4578,14 +4593,12 @@ function cleanExistingNameFields(firstInput, lastInput) {
             )
         );
 
-        // v507: Do not discard a confirmed multiword surname during cleanup.
-        const fullFirst = String(firstInput?.value || '').trim();
-        const rawHeader = String(document.getElementById('txtResumeRaw')?.value || '').slice(0,400);
-        const escapePart = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const parts = originalLast.split(/\s+/);
-        if (fullFirst && parts.length > 1 && parts.every(p => /^\p{L}[\p{L}\p{M}'’\-]+$/u.test(p) && !isNameCredentialToken(p)) &&
-            new RegExp('^\\s*' + escapePart(fullFirst) + '\\s+' + parts.map(escapePart).join('\\s+') + '(?=\\s|$|[^A-Za-z])', 'i').test(rawHeader)) {
-            cleanedLast = applyLearnedMacLastNameCase(originalLast);
+        // v512: A confirmed full header does not exempt ordinary multiple surnames
+        // from the contact-field formatting rule. Keep only the terminal surname
+        // (including recognized particles and hyphenated tokens).
+        if (cleanedLast !== originalLast && originalLast.split(/\s+/).length > 1 &&
+            isRejectedLastNameCandidate(cleanedLast)) {
+            cleanedLast = originalLast;
         }
 
         // v91 TRANSACTIONAL SAFETY:
@@ -4676,6 +4689,29 @@ function fillNameFields(options = {}) {
     // detection later decides not to replace them.
     const cleanedExisting = cleanExistingNameFields(firstInput, lastInput);
     traceAuto("CURRENT", `first=${JSON.stringify(firstInput.value)} last=${JSON.stringify(lastInput.value)} cleaned=${Boolean(cleanedExisting)}`);
+
+    // v512: Finish an exact, header-supported surname-only cleanup transaction
+    // before the full-name preservation and truncation guards can veto it.
+    const oldLast512 = rawExistingNameBeforeCleanup.last;
+    const newLast512 = String(lastInput.value || "").trim();
+    const oldFirst512 = rawExistingNameBeforeCleanup.first;
+    const fold512 = v => normalizeUnicode(String(v || "")).toLowerCase().replace(/\s+/g, " ").trim();
+    if (cleanedExisting && oldLast512.split(/\s+/).length > 1 &&
+        fold512(oldFirst512) === fold512(firstInput.value) &&
+        fold512(oldLast512) !== fold512(newLast512) &&
+        fold512(enforceSingleLastName(oldLast512)) === fold512(newLast512) &&
+        newLast512 && !isRejectedAutoName({first: firstInput.value, last: newLast512})) {
+        const full512 = fold512(oldFirst512 + " " + oldLast512);
+        const header512 = fold512(String(document.getElementById("txtResumeRaw")?.value || getResumeText() || "").slice(0, 400));
+        if (header512 === full512 || header512.startsWith(full512 + " ") ||
+            getResumeHeaderLines().some(item => fold512(item.text) === full512)) {
+            window.__frt7_last_auto_name = {first: firstInput.value, last: lastInput.value};
+            console.info(`Toolbar NAME v512: normalized multiple surnames "${oldLast512}" -> "${newLast512}"; confirmed full header retained as evidence.`);
+            traceAuto("WRITTEN", `first=${JSON.stringify(firstInput.value)} last=${JSON.stringify(lastInput.value)}`);
+            return true;
+        }
+    }
+
 
     /*
      * Preserve the existing full contact name when the resume only presents
